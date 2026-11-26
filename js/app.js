@@ -58,7 +58,8 @@ const DEFAULT_PREFS = {
   size: { brush: 8, eraser: 40, shape: 6 }, opacity: { brush: 100, eraser: 100, shape: 100 },
   smooth: 25, fillTol: 40, fillAll: true,
   penOnly: false, onion: true, onionPrev: 1, onionNext: 1, onionAlpha: 30, onionTint: true,
-  grid: false, gridSize: '100', recent: [], layersOpen: true,
+  grid: false, gridSize: '100', recent: [], layersOpen: false,
+  selectMode: 'lasso', textFont: 'sans-serif', textSize: 72, textBold: false, textOutline: false, sound: true,
 };
 function loadPrefs() {
   try {
@@ -69,11 +70,6 @@ function loadPrefs() {
 const prefs = loadPrefs();
 function savePrefs() { try { localStorage.setItem('animate.prefs', JSON.stringify(prefs)); } catch { /* 저장 불가 무시 */ } }
 
-const SIZE_PRESETS = [
-  ['가로 HD', 1280, 720], ['가로 FHD', 1920, 1080], ['세로 쇼츠 HD', 720, 1280], ['세로 쇼츠 FHD', 1080, 1920],
-  ['정사각', 1080, 1080], ['4:3', 1440, 1080], ['탭 화면', 2000, 1200],
-];
-const FPS_PRESETS = [4, 6, 8, 10, 12, 15, 24, 30, 48, 60];
 const PALETTE = ['#000000', '#3b3b3b', '#7a7a7a', '#b8b8b8', '#ffffff', '#7a1f1f', '#d62828', '#ff6b6b', '#ffb4a2', '#f77f00',
   '#fcbf49', '#ffe66d', '#8ac926', '#2a9d8f', '#0b6e4f', '#4cc9f0', '#1982c4', '#3a0ca3', '#6a4c93', '#c77dff',
   '#ff70a6', '#8d5524', '#c68642', '#f1c27d', '#ffdbac', '#264653', '#e9c46a', '#e76f51', '#a8dadc', '#1d3557'];
@@ -86,6 +82,8 @@ let cur = 0;             // 현재 프레임 인덱스
 let layerId = null;      // 현재 레이어 id
 let W = 0, H = 0;
 let saved = new Map();   // 저장된 셀 key -> 셀 객체 (변경 감지용)
+const audioBlobs = new Map();   // clipId -> Blob
+const audioBuffers = new Map(); // clipId -> AudioBuffer
 
 // 작업용 캔버스
 let work, workCtx, backup, backupCtx, strokeBuf, sctx, below, belowCtx, above, aboveCtx, onion, onionCtx, tmp, tmpCtx;
@@ -95,7 +93,19 @@ let workBounds = null;   // [x0,y0,x1,y1] 그림이 있을 수 있는 영역
 
 const view = $('#view');
 const vctx = view.getContext('2d');
-const V = { zoom: 1, x: 0, y: 0 };
+const V = { zoom: 1, x: 0, y: 0, r: 0 }; // r: 캔버스 회전(라디안)
+
+function screenToDoc(sx, sy) {
+  const dx = sx - V.x, dy = sy - V.y, c = Math.cos(V.r), s = Math.sin(V.r);
+  return { x: (dx * c + dy * s) / V.zoom, y: (-dx * s + dy * c) / V.zoom };
+}
+// 화면 좌표 screenPt 아래에 문서 좌표 docPt 가 오도록 확대/회전/이동을 정한다
+function placeView(screenPt, docPt, z, r) {
+  V.zoom = z; V.r = r;
+  const c = Math.cos(r), s = Math.sin(r);
+  V.x = screenPt.x - (docPt.x * c - docPt.y * s) * z;
+  V.y = screenPt.y - (docPt.x * s + docPt.y * c) * z;
+}
 
 const frames = () => project.frames;
 const layers = () => project.layers;
@@ -221,6 +231,7 @@ function rebuildOnion() {
 
 function setActive(fi, lid = layerId) {
   if (stroke) return;
+  commitFloat();
   commitActive();
   cur = clamp(fi, 0, frames().length - 1);
   layerId = lid;
@@ -250,8 +261,9 @@ function render() {
   vctx.fillStyle = '#3a3f4b';
   vctx.fillRect(0, 0, view.width, view.height);
   const z = V.zoom * dpr;
-  vctx.setTransform(z, 0, 0, z, V.x * dpr, V.y * dpr);
-  vctx.imageSmoothingEnabled = V.zoom < 2;
+  const rc = Math.cos(V.r), rs = Math.sin(V.r);
+  vctx.setTransform(z * rc, z * rs, -z * rs, z * rc, V.x * dpr, V.y * dpr);
+  vctx.imageSmoothingEnabled = V.zoom < 2 || V.r !== 0;
   vctx.shadowColor = 'rgba(0,0,0,.35)'; vctx.shadowBlur = 12 / V.zoom;
   vctx.fillStyle = project.bg;
   vctx.fillRect(0, 0, W, H);
@@ -271,12 +283,14 @@ function render() {
         vctx.globalAlpha = L.opacity * stroke.alpha;
         vctx.drawImage(strokeBuf, 0, 0);
       } else vctx.drawImage(work, 0, 0);
+      if (float) { vctx.globalAlpha = L.opacity; drawFloat(vctx, float); }
       vctx.globalAlpha = 1;
     }
     vctx.drawImage(above, 0, 0);
   }
 
   if (prefs.grid) drawGrid(z);
+  if (!playing) drawSelectionOverlay();
   vctx.lineWidth = 1 / V.zoom;
   vctx.strokeStyle = 'rgba(0,0,0,.35)';
   vctx.strokeRect(0, 0, W, H);
@@ -323,7 +337,8 @@ function resizeView() {
 function fitView() {
   const r = view.getBoundingClientRect();
   if (!r.width || !project) return;
-  V.zoom = Math.min((r.width - 32) / W, (r.height - 32) / H);
+  V.r = 0;
+  V.zoom = Math.min((r.width - 16) / W, (r.height - 16) / H);
   V.x = (r.width - W * V.zoom) / 2;
   V.y = (r.height - H * V.zoom) / 2;
   showHud();
@@ -333,7 +348,10 @@ function fitView() {
 let hudTimer = 0;
 function showHud() {
   const h = $('#hud');
-  h.textContent = `${Math.round(V.zoom * 100)}%`;
+  let deg = Math.round((V.r * 180) / Math.PI) % 360;
+  if (deg > 180) deg -= 360;
+  if (deg <= -180) deg += 360;
+  h.textContent = `${Math.round(V.zoom * 100)}%` + (deg ? ` · ${deg}°` : '');
   h.hidden = false;
   clearTimeout(hudTimer);
   hudTimer = setTimeout(() => { h.hidden = true; }, 1200);
@@ -341,7 +359,7 @@ function showHud() {
 
 function toDoc(e) {
   const r = view.getBoundingClientRect();
-  return { x: (e.clientX - r.left - V.x) / V.zoom, y: (e.clientY - r.top - V.y) / V.zoom };
+  return screenToDoc(e.clientX - r.left, e.clientY - r.top);
 }
 
 // =====================================================================
@@ -470,6 +488,8 @@ function startStroke(e) {
   if (L.locked) { toast('잠긴 레이어예요. 자물쇠를 풀어 주세요.'); return; }
   const p = toDoc(e);
   let tool = prefs.tool;
+  if (tool === 'select') { closeToolPanel(); selectDown(e, p); return; }
+  if (tool === 'text') { closeToolPanel(); textAt(p); return; }
   if (tool === 'fill') { doFill(p); return; }
   if (tool === 'picker') { pickColor(p); return; }
   // S펜 버튼을 누른 채 그리면 지우개
@@ -489,6 +509,7 @@ function startStroke(e) {
 }
 
 function moveStroke(e) {
+  if (stroke.kind) { selectMove(e); return; }
   const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
   for (const ev of list.length ? list : [e]) {
     const p = toDoc(ev);
@@ -504,6 +525,7 @@ function moveStroke(e) {
 }
 
 function endStroke() {
+  if (stroke.kind) { selectUp(); return; }
   const s = stroke;
   if (s.tool === 'shape') drawShape();
   else if (prefs.smooth > 0 && s.raw) dab(s.sm, s.raw, s.pr, s.pr * 0.6);
@@ -527,6 +549,12 @@ function endStroke() {
 
 function cancelStroke() {
   if (!stroke) return;
+  if (stroke.kind) {
+    if (stroke.f0 && float) Object.assign(float, stroke.f0);
+    stroke = null;
+    requestRender();
+    return;
+  }
   workCtx.clearRect(0, 0, W, H);
   workCtx.drawImage(backup, 0, 0);
   stroke = null;
@@ -629,6 +657,323 @@ function pickColor(p) {
   toast('색을 가져왔어요');
 }
 
+// =====================================================================
+// 선택(올가미) · 떠 있는 그림(float) · 텍스트
+// =====================================================================
+let float = null;    // {canvas, cx, cy, sx, sy, rot, liftBox}
+let selClip = null;  // 복사해 둔 선택 영역
+
+function floatMatrix(f) {
+  const c = Math.cos(f.rot), s = Math.sin(f.rot);
+  return { a: c * f.sx, b: s * f.sx, c: -s * f.sy, d: c * f.sy, e: f.cx, f: f.cy };
+}
+function floatCorners(f) {
+  const w = f.canvas.width / 2, h = f.canvas.height / 2, m = floatMatrix(f);
+  return [[-w, -h], [w, -h], [w, h], [-w, h]].map(([u, v]) => ({ x: m.a * u + m.c * v + m.e, y: m.b * u + m.d * v + m.f }));
+}
+function floatRotHandle(f) {
+  const k = floatCorners(f);
+  const mx = (k[0].x + k[1].x) / 2, my = (k[0].y + k[1].y) / 2;
+  let dx = mx - f.cx, dy = my - f.cy;
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const off = 36 / V.zoom;
+  return { x: mx + dx * off, y: my + dy * off, mx, my };
+}
+function insideFloat(f, p) {
+  const dx = p.x - f.cx, dy = p.y - f.cy, c = Math.cos(f.rot), s = Math.sin(f.rot);
+  const u = (dx * c + dy * s) / f.sx, v = (-dx * s + dy * c) / f.sy;
+  return Math.abs(u) <= f.canvas.width / 2 && Math.abs(v) <= f.canvas.height / 2;
+}
+function drawFloat(ctx, f) {
+  const m = floatMatrix(f);
+  ctx.save();
+  ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
+  ctx.drawImage(f.canvas, -f.canvas.width / 2, -f.canvas.height / 2);
+  ctx.restore();
+}
+function pathTo(ctx, pts) {
+  ctx.beginPath();
+  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.closePath();
+}
+function cloneCanvas(c) {
+  const n = makeCanvas(c.width, c.height);
+  n.getContext('2d').drawImage(c, 0, 0);
+  return n;
+}
+
+function liftSelection(path) {
+  const xs = path.map((p) => p.x), ys = path.map((p) => p.y);
+  const bx = clamp(Math.floor(Math.min(...xs)), 0, W), by = clamp(Math.floor(Math.min(...ys)), 0, H);
+  const ex = clamp(Math.ceil(Math.max(...xs)), 0, W), ey = clamp(Math.ceil(Math.max(...ys)), 0, H);
+  const bw = ex - bx, bh = ey - by;
+  if (bw < 2 || bh < 2) return;
+  const c = makeCanvas(bw, bh);
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  cx.translate(-bx, -by);
+  pathTo(cx, path);
+  cx.fillStyle = '#000';
+  cx.fill();
+  cx.globalCompositeOperation = 'source-in';
+  cx.drawImage(work, 0, 0);
+  const d = cx.getImageData(bx, by, bw, bh).data;
+  let any = false;
+  for (let i = 3; i < d.length; i += 4) if (d[i]) { any = true; break; }
+  if (!any) { toast('선택한 곳에 그림이 없어요'); return; }
+  backupCtx.clearRect(0, 0, W, H);
+  backupCtx.drawImage(work, 0, 0);
+  workCtx.save();
+  workCtx.globalCompositeOperation = 'destination-out';
+  pathTo(workCtx, path);
+  workCtx.fill();
+  workCtx.restore();
+  float = { canvas: c, cx: bx + bw / 2, cy: by + bh / 2, sx: 1, sy: 1, rot: 0, liftBox: [bx, by, ex, ey] };
+  updateSelBar();
+  requestRender();
+}
+
+function startFloat(canvas, cx, cy, sx = 1, sy = 1, rot = 0) {
+  commitFloat();
+  backupCtx.clearRect(0, 0, W, H);
+  backupCtx.drawImage(work, 0, 0);
+  float = { canvas, cx, cy, sx, sy, rot, liftBox: null };
+  updateSelBar();
+  requestRender();
+}
+
+function finishFloat(stamp) {
+  if (!float) return;
+  const f = float;
+  float = null;
+  const k = floatCorners(f);
+  let x0 = Math.min(...k.map((p) => p.x)), y0 = Math.min(...k.map((p) => p.y));
+  let x1 = Math.max(...k.map((p) => p.x)), y1 = Math.max(...k.map((p) => p.y));
+  if (!stamp) { x0 = x1 = f.cx; y0 = y1 = f.cy; }
+  if (f.liftBox) {
+    x0 = Math.min(x0, f.liftBox[0]); y0 = Math.min(y0, f.liftBox[1]);
+    x1 = Math.max(x1, f.liftBox[2]); y1 = Math.max(y1, f.liftBox[3]);
+  }
+  if (stamp) {
+    const m = floatMatrix(f);
+    workCtx.save();
+    workCtx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+    workCtx.drawImage(f.canvas, -f.canvas.width / 2, -f.canvas.height / 2);
+    workCtx.restore();
+  }
+  const bx = clamp(Math.floor(x0) - 1, 0, W), by = clamp(Math.floor(y0) - 1, 0, H);
+  const ex = clamp(Math.ceil(x1) + 1, 0, W), ey = clamp(Math.ceil(y1) + 1, 0, H);
+  updateSelBar();
+  if (ex - bx > 0 && ey - by > 0) {
+    pushPixelUndo(bx, by, ex - bx, ey - by, backupCtx.getImageData(bx, by, ex - bx, ey - by), workCtx.getImageData(bx, by, ex - bx, ey - by));
+    extendBounds(bx, by, ex, ey);
+    workDirty = true;
+    afterEdit();
+  }
+  requestRender();
+}
+function commitFloat() { finishFloat(true); }
+function deleteFloat() { finishFloat(false); }
+function cancelFloat() {
+  if (!float) return;
+  float = null;
+  workCtx.clearRect(0, 0, W, H);
+  workCtx.drawImage(backup, 0, 0);
+  updateSelBar();
+  requestRender();
+}
+
+function copyFloat() {
+  if (!float) return;
+  selClip = { canvas: cloneCanvas(float.canvas), cx: float.cx, cy: float.cy, sx: float.sx, sy: float.sy, rot: float.rot };
+  toast('복사했어요. 다른 프레임에서 붙여넣기 할 수 있어요');
+  updateSelBar();
+}
+function pasteClip() {
+  if (!selClip) return;
+  const L = activeLayer();
+  if (!L.visible || L.locked) { toast('숨기거나 잠긴 레이어에는 붙여넣을 수 없어요'); return; }
+  const c = selClip;
+  startFloat(cloneCanvas(c.canvas), c.cx, c.cy, c.sx, c.sy, c.rot);
+  if (prefs.tool !== 'select') setTool('select');
+}
+function selectAll() {
+  commitFloat();
+  const b = workBounds || [0, 0, W, H];
+  const x0 = clamp(b[0], 0, W), y0 = clamp(b[1], 0, H), x1 = clamp(b[2], 0, W), y1 = clamp(b[3], 0, H);
+  liftSelection([{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]);
+}
+
+function updateSelBar() {
+  const bar = $('#selBar');
+  const show = !!project && (float || prefs.tool === 'select');
+  bar.hidden = !show;
+  if (!show) return;
+  bar.textContent = '';
+  const b = (label, fn, cls) => {
+    const x = document.createElement('button');
+    x.type = 'button'; x.textContent = label;
+    if (cls) x.className = cls;
+    x.onclick = fn;
+    bar.append(x);
+  };
+  if (float) {
+    b('✔ 확인', commitFloat, 'ok');
+    b('✕ 취소', cancelFloat);
+    b('📋 복사', copyFloat);
+    b('✂ 잘라내기', () => { copyFloat(); deleteFloat(); });
+    b('⇋ 좌우', () => { float.sx *= -1; requestRender(); });
+    b('⇵ 상하', () => { float.sy *= -1; requestRender(); });
+    b('↺ 원래대로', () => {
+      float.rot = 0; float.sx = Math.sign(float.sx); float.sy = Math.sign(float.sy);
+      if (float.liftBox) { float.cx = (float.liftBox[0] + float.liftBox[2]) / 2; float.cy = (float.liftBox[1] + float.liftBox[3]) / 2; }
+      requestRender();
+    });
+    b('🗑 삭제', deleteFloat);
+  } else {
+    b(prefs.selectMode === 'rect' ? '▭ 사각형 선택' : '〰 자유 선택', () => {
+      prefs.selectMode = prefs.selectMode === 'rect' ? 'lasso' : 'rect';
+      savePrefs(); updateSelBar();
+    });
+    b('⬚ 레이어 전체 선택', selectAll);
+  }
+  if (selClip) b('📥 붙여넣기', pasteClip);
+}
+
+// 선택 도구에서 펜을 눌렀을 때
+function selectDown(e, p) {
+  if (float) {
+    const tol = 24 / V.zoom;
+    const rh = floatRotHandle(float);
+    const corners = floatCorners(float);
+    const base = { id: e.pointerId, type: e.pointerType, p0: p, f0: { ...float } };
+    if (Math.hypot(p.x - rh.x, p.y - rh.y) < tol) { stroke = { ...base, kind: 'rotate' }; return; }
+    if (corners.some((k) => Math.hypot(p.x - k.x, p.y - k.y) < tol)) { stroke = { ...base, kind: 'scale' }; return; }
+    if (insideFloat(float, p)) { stroke = { ...base, kind: 'move' }; return; }
+    commitFloat();
+  }
+  stroke = { id: e.pointerId, type: e.pointerType, kind: 'lasso', pts: [p], start: p };
+  requestRender();
+}
+function selectMove(e) {
+  const p = toDoc(e);
+  const s = stroke;
+  if (s.kind === 'lasso') {
+    if (prefs.selectMode === 'rect') s.end = p;
+    else {
+      const last = s.pts[s.pts.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) * V.zoom > 3) s.pts.push(p);
+    }
+  } else if (s.kind === 'move') {
+    float.cx = s.f0.cx + p.x - s.p0.x;
+    float.cy = s.f0.cy + p.y - s.p0.y;
+  } else if (s.kind === 'scale') {
+    const d0 = Math.hypot(s.p0.x - s.f0.cx, s.p0.y - s.f0.cy) || 1;
+    const k = Math.max(0.02, Math.hypot(p.x - s.f0.cx, p.y - s.f0.cy) / d0);
+    float.sx = s.f0.sx * k; float.sy = s.f0.sy * k;
+  } else if (s.kind === 'rotate') {
+    const a0 = Math.atan2(s.p0.y - s.f0.cy, s.p0.x - s.f0.cx);
+    const a1 = Math.atan2(p.y - s.f0.cy, p.x - s.f0.cx);
+    let r = s.f0.rot + a1 - a0;
+    const q = Math.PI / 4, near = Math.round(r / q) * q;
+    if (Math.abs(r - near) < (4 * Math.PI) / 180) r = near;
+    float.rot = r;
+  }
+  requestRender();
+}
+function selectUp() {
+  const s = stroke;
+  stroke = null;
+  if (s.kind === 'lasso') {
+    let path = s.pts;
+    if (prefs.selectMode === 'rect') {
+      const a = s.start, b = s.end || s.start;
+      path = [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y: b.y }, { x: a.x, y: b.y }];
+    }
+    if (path.length >= 3) liftSelection(path);
+  }
+  requestRender();
+}
+
+function drawSelectionOverlay() {
+  const lw = 1.5 / V.zoom;
+  if (stroke && stroke.kind === 'lasso') {
+    let pts = stroke.pts;
+    if (prefs.selectMode === 'rect') {
+      const a = stroke.start, b = stroke.end || a;
+      pts = [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }];
+    }
+    vctx.lineWidth = lw;
+    vctx.setLineDash([6 / V.zoom, 4 / V.zoom]);
+    vctx.strokeStyle = '#000'; pathTo(vctx, pts); vctx.stroke();
+    vctx.lineDashOffset = 5 / V.zoom;
+    vctx.strokeStyle = '#fff'; pathTo(vctx, pts); vctx.stroke();
+    vctx.setLineDash([]); vctx.lineDashOffset = 0;
+  }
+  if (float) {
+    const k = floatCorners(float);
+    vctx.lineWidth = lw;
+    vctx.setLineDash([6 / V.zoom, 4 / V.zoom]);
+    vctx.strokeStyle = '#4c9dff'; pathTo(vctx, k); vctx.stroke();
+    vctx.setLineDash([]);
+    const rh = floatRotHandle(float);
+    vctx.beginPath(); vctx.moveTo(rh.mx, rh.my); vctx.lineTo(rh.x, rh.y); vctx.stroke();
+    const r = 9 / V.zoom;
+    vctx.fillStyle = '#fff';
+    for (const p of k) {
+      vctx.beginPath(); vctx.rect(p.x - r, p.y - r, r * 2, r * 2); vctx.fill(); vctx.stroke();
+    }
+    vctx.fillStyle = '#ff7a45';
+    vctx.beginPath(); vctx.arc(rh.x, rh.y, r * 1.1, 0, Math.PI * 2); vctx.fill(); vctx.stroke();
+  }
+}
+
+// ---------- 텍스트 ----------
+async function textAt(p) {
+  const L = activeLayer();
+  if (!L.visible || L.locked) { toast('숨기거나 잠긴 레이어에는 글자를 넣을 수 없어요'); return; }
+  $('#textInput').value = '';
+  $('#textFont').value = prefs.textFont;
+  $('#textSize').value = prefs.textSize;
+  $('#textBold').checked = prefs.textBold;
+  $('#textOutline').checked = prefs.textOutline;
+  setTimeout(() => $('#textInput').focus(), 60);
+  if ((await openDialog($('#dlgText'))) !== 'ok') return;
+  const text = $('#textInput').value.replace(/\s+$/, '');
+  if (!text) return;
+  prefs.textFont = $('#textFont').value;
+  prefs.textSize = clamp(+$('#textSize').value || 72, 8, 600);
+  prefs.textBold = $('#textBold').checked;
+  prefs.textOutline = $('#textOutline').checked;
+  savePrefs();
+  const size = prefs.textSize;
+  const font = `${prefs.textBold ? 'bold ' : ''}${size}px ${prefs.textFont}`;
+  const lines = text.split('\n');
+  const meas = makeCanvas(1, 1).getContext('2d');
+  meas.font = font;
+  const pad = Math.ceil(size * 0.2) + (prefs.textOutline ? Math.ceil(size / 8) : 0);
+  const lh = Math.ceil(size * 1.25);
+  const w = Math.ceil(Math.max(...lines.map((l) => meas.measureText(l).width))) + pad * 2;
+  const h = lh * lines.length + pad * 2;
+  const c = makeCanvas(w, h);
+  const ctx = c.getContext('2d');
+  ctx.font = font;
+  ctx.textBaseline = 'top';
+  lines.forEach((line, i) => {
+    const y = pad + i * lh + (lh - size) / 2;
+    if (prefs.textOutline) {
+      ctx.lineWidth = Math.max(2, size / 8);
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#ffffff';
+      ctx.strokeText(line, pad, y);
+    }
+    ctx.fillStyle = prefs.color;
+    ctx.fillText(line, pad, y);
+  });
+  setTool('select');
+  startFloat(c, p.x + w / 2, p.y + h / 2);
+}
+
 // ---------- 입력 이벤트 ----------
 const touches = new Map();
 let gest = null;
@@ -648,27 +993,38 @@ function localPt(e) {
   const r = view.getBoundingClientRect();
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
+const angleOf = (pts) => (pts.length >= 2 ? Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x) : 0);
 function gestureBaseline() {
   const pts = [...touches.values()];
   if (!pts.length) return;
   const c = centroid(pts);
   gest = {
-    c0: c, s0: spread(pts, c), z0: V.zoom, x0: V.x, y0: V.y, n: pts.length,
+    c0: c, s0: spread(pts, c), z0: V.zoom, r0: V.r, a0: angleOf(pts), d0: screenToDoc(c.x, c.y), n: pts.length,
     maxN: Math.max(gest ? gest.maxN : 0, pts.length),
     t0: gest ? gest.t0 : performance.now(), moved: gest ? gest.moved : 0,
   };
+}
+function snapAngle(r) {
+  const q = Math.PI / 2;
+  const near = Math.round(r / q) * q;
+  return Math.abs(r - near) < (5 * Math.PI) / 180 ? near : r;
 }
 function gestureMove() {
   const pts = [...touches.values()];
   if (!gest || !pts.length) return;
   const c = centroid(pts);
-  let z = gest.z0;
-  if (pts.length >= 2) z = clamp(gest.z0 * (spread(pts, c) / gest.s0), 0.05, 32);
-  const dx = (gest.c0.x - gest.x0) / gest.z0, dy = (gest.c0.y - gest.y0) / gest.z0;
-  V.zoom = z;
-  V.x = c.x - dx * z;
-  V.y = c.y - dy * z;
-  gest.moved = Math.max(gest.moved, Math.hypot(c.x - gest.c0.x, c.y - gest.c0.y) + Math.abs(spread(pts, c) - gest.s0));
+  let z = gest.z0, r = gest.r0, turn = 0;
+  if (pts.length >= 2) {
+    z = clamp(gest.z0 * (spread(pts, c) / gest.s0), 0.05, 32);
+    let da = angleOf(pts) - gest.a0;
+    if (da > Math.PI) da -= 2 * Math.PI;
+    if (da < -Math.PI) da += 2 * Math.PI;
+    r = snapAngle(gest.r0 + da);
+    turn = Math.abs(da) * spread(pts, c); // 돌린 거리(손가락이 움직인 길이)
+  }
+  placeView(c, gest.d0, z, r);
+  // 이동·확대·회전 중 하나라도 하면 '톡'(실행취소)으로 보지 않는다
+  gest.moved = Math.max(gest.moved, Math.hypot(c.x - gest.c0.x, c.y - gest.c0.y) + Math.abs(spread(pts, c) - gest.s0) + turn);
   showHud();
   requestRender();
 }
@@ -678,7 +1034,7 @@ view.addEventListener('pointerdown', (e) => {
   if (!project) return;
   if (e.pointerType === 'touch') touches.set(e.pointerId, localPt(e));
   try { view.setPointerCapture(e.pointerId); } catch { /* 무시 */ }
-  closeToolPanel();
+  closeMenus();
   if (e.pointerType === 'pen' && !penSeen) {
     penSeen = true;
     if (!prefs.penOnly) {
@@ -742,10 +1098,9 @@ view.addEventListener('contextmenu', (e) => e.preventDefault());
 view.addEventListener('wheel', (e) => {
   e.preventDefault();
   const p = localPt(e);
-  const z = clamp(V.zoom * Math.exp(-e.deltaY * 0.0015), 0.05, 32);
-  V.x = p.x - ((p.x - V.x) * z) / V.zoom;
-  V.y = p.y - ((p.y - V.y) * z) / V.zoom;
-  V.zoom = z;
+  const d = screenToDoc(p.x, p.y);
+  if (e.shiftKey) placeView(p, d, V.zoom, snapAngle(V.r + e.deltaY * 0.002));
+  else placeView(p, d, clamp(V.zoom * Math.exp(-e.deltaY * 0.0015), 0.05, 32), V.r);
   showHud();
   requestRender();
 }, { passive: false });
@@ -761,6 +1116,14 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'g') setTool('fill');
   else if (k === 'i') setTool('picker');
   else if (k === 'u') setTool('shape');
+  else if (k === 's') setTool('select');
+  else if (k === 't') setTool('text');
+  else if (k === 'enter' && float) commitFloat();
+  else if (k === 'escape' && float) cancelFloat();
+  else if ((k === 'delete' || k === 'backspace') && float) deleteFloat();
+  else if ((e.ctrlKey || e.metaKey) && k === 'c' && float) copyFloat();
+  else if ((e.ctrlKey || e.metaKey) && k === 'v') pasteClip();
+  else if ((e.ctrlKey || e.metaKey) && k === 'a') { e.preventDefault(); setTool('select'); selectAll(); }
   else if (k === 'arrowleft') setActive(cur - 1);
   else if (k === 'arrowright') setActive(cur + 1);
 });
@@ -816,6 +1179,7 @@ function applyPixel(u, which) {
 }
 function undo() {
   if (stroke || playing) return;
+  if (float) { cancelFloat(); toast('선택을 취소했어요', 900); return; }
   const u = undoStack.pop();
   if (!u) { toast('더 이상 되돌릴 수 없어요'); return; }
   if (u.t === 'px') applyPixel(u, 'before');
@@ -826,6 +1190,7 @@ function undo() {
 }
 function redo() {
   if (stroke || playing) return;
+  commitFloat();
   const u = redoStack.pop();
   if (!u) { toast('다시 실행할 내용이 없어요'); return; }
   if (u.t === 'px') applyPixel(u, 'after');
@@ -857,6 +1222,7 @@ function updateUndoButtons() {
 // 구조 변경(프레임·레이어 추가/삭제/이동 등)을 실행취소 가능하게 감싼다
 function structOp(fn, { thumbsStale = false } = {}) {
   if (stroke || playing) return;
+  commitFloat();
   commitActive();
   const before = snapshot();
   const ok = fn();
@@ -941,11 +1307,36 @@ function rebuildTimeline() {
   add.addEventListener('click', () => structOp(() => { project.frames.push(newFrame()); cur = project.frames.length - 1; }));
   framesEl.append(add);
   markActiveFrame();
+  drawAudioStrip();
+}
+
+function drawAudioStrip() {
+  framesEl.querySelectorAll('.aclip').forEach((e) => e.remove());
+  if (!project.audio || !project.audio.length) return;
+  const kids = [...framesEl.querySelectorAll('.frame')];
+  if (!kids.length) return;
+  const [starts, total] = computeStarts();
+  project.audio.forEach((clip, k) => {
+    const st = frameStartTime(clip.start);
+    const end = Math.min(total, st + clip.duration);
+    if (end <= st) return;
+    const i0 = frameAtTime(starts, st), i1 = frameAtTime(starts, end - 1e-6);
+    const fd = (i) => frames()[i].hold / project.fps;
+    const left = kids[i0].offsetLeft + kids[i0].offsetWidth * ((st - starts[i0]) / fd(i0));
+    const right = kids[i1].offsetLeft + kids[i1].offsetWidth * ((end - starts[i1]) / fd(i1));
+    const s = document.createElement('span');
+    s.className = 'aclip';
+    s.style.left = left + 'px';
+    s.style.width = Math.max(6, right - left) + 'px';
+    s.style.bottom = (2 + (k % 2) * 6) + 'px';
+    s.title = clip.name;
+    framesEl.append(s);
+  });
 }
 
 function markActiveFrame() {
-  [...framesEl.children].forEach((el, i) => el.classList.toggle('active', i === cur));
-  const el = framesEl.children[cur];
+  framesEl.querySelectorAll('.frame').forEach((el, i) => el.classList.toggle('active', i === cur));
+  const el = framesEl.querySelectorAll('.frame')[cur];
   if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   const f = frames()[cur];
   $('#frPos').textContent = `${cur + 1} / ${frames().length}`;
@@ -1148,50 +1539,279 @@ $('#layerOpacity').addEventListener('input', (e) => {
 $('#layerOpacity').addEventListener('change', () => { thumbs.clear(); rebuildTimeline(); scheduleSave(); });
 
 // =====================================================================
+// 시간 계산
+// =====================================================================
+function computeStarts() {
+  const st = [];
+  let t = 0;
+  for (const f of frames()) { st.push(t); t += f.hold / project.fps; }
+  return [st, t];
+}
+function frameStartTime(i) {
+  const fs = frames();
+  let t = 0;
+  for (let k = 0; k < Math.min(i, fs.length); k++) t += fs[k].hold;
+  return t / project.fps;
+}
+function frameAtTime(starts, t) {
+  let lo = 0, hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= t) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
+// =====================================================================
+// 소리
+// =====================================================================
+let actx = null, audioNodes = [], previewNode = null;
+function getAC() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+async function ensureAudioBuffers() {
+  for (const clip of project.audio || []) {
+    if (audioBuffers.has(clip.id) || !audioBlobs.has(clip.id)) continue;
+    try {
+      const buf = await getAC().decodeAudioData(await audioBlobs.get(clip.id).arrayBuffer());
+      audioBuffers.set(clip.id, buf);
+    } catch (e) { console.warn('소리 해석 실패', clip.name, e); }
+  }
+}
+function stopAudio() {
+  for (const n of audioNodes) { try { n.stop(); } catch { /* 이미 멈춤 */ } }
+  audioNodes = [];
+}
+function scheduleAudio(fromTime, total) {
+  stopAudio();
+  if (!prefs.sound || !project.audio || !project.audio.length) return;
+  const ac = getAC();
+  const now = ac.currentTime + 0.02;
+  for (const clip of project.audio) {
+    const buf = audioBuffers.get(clip.id);
+    if (!buf) continue;
+    const st = frameStartTime(clip.start);
+    const end = Math.min(total, st + buf.duration);
+    if (end <= fromTime) continue;
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const g = ac.createGain();
+    g.gain.value = clip.volume;
+    src.connect(g).connect(ac.destination);
+    if (st >= fromTime) src.start(now + (st - fromTime), 0, end - st);
+    else src.start(now, fromTime - st, end - fromTime);
+    audioNodes.push(src);
+  }
+}
+
+async function addClip(blob, name, start, rec = false) {
+  const id = uid();
+  let duration = 0;
+  try {
+    const buf = await getAC().decodeAudioData(await blob.arrayBuffer());
+    audioBuffers.set(id, buf);
+    duration = buf.duration;
+  } catch {
+    toast('이 소리 파일은 열 수 없어요');
+    return;
+  }
+  audioBlobs.set(id, blob);
+  await store.putAudio({ key: `${project.id}|${id}`, cid: id, blob });
+  project.audio.push({ id, name, start, volume: 1, duration, rec });
+  scheduleSave();
+  rebuildTimeline();
+  if ($('#dlgAudio').open) renderAudioList();
+  toast(`'${name}' 소리를 넣었어요`);
+}
+
+function renderAudioList() {
+  const list = $('#audioList');
+  list.textContent = '';
+  $('#audioEmpty').hidden = project.audio.length > 0;
+  for (const clip of project.audio) {
+    const row = document.createElement('div');
+    row.className = 'clip';
+    const name = document.createElement('b');
+    name.textContent = `${clip.rec ? '🎙' : '🎵'} ${clip.name} · ${clip.duration.toFixed(1)}초`;
+    const btns = document.createElement('div');
+    btns.className = 'row';
+    const play = document.createElement('button');
+    play.type = 'button'; play.className = 'mini'; play.textContent = '▶ 듣기';
+    play.onclick = async () => {
+      if (previewNode) { try { previewNode.stop(); } catch { /* 무시 */ } previewNode = null; return; }
+      await ensureAudioBuffers();
+      const buf = audioBuffers.get(clip.id);
+      if (!buf) return;
+      const ac = getAC();
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      const g = ac.createGain(); g.gain.value = clip.volume;
+      src.connect(g).connect(ac.destination);
+      src.onended = () => { if (previewNode === src) previewNode = null; };
+      src.start();
+      previewNode = src;
+    };
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'mini'; del.textContent = '🗑';
+    del.onclick = async () => {
+      if (!(await confirmDlg(`'${clip.name}' 소리를 지울까요?`, '지우기'))) return;
+      project.audio = project.audio.filter((c) => c !== clip);
+      audioBlobs.delete(clip.id); audioBuffers.delete(clip.id);
+      await store.deleteAudio(`${project.id}|${clip.id}`);
+      scheduleSave(); rebuildTimeline(); renderAudioList();
+    };
+    btns.append(play, del);
+    const ctrl = document.createElement('div');
+    ctrl.className = 'ctrl';
+    const st = document.createElement('input');
+    st.type = 'number'; st.min = 1; st.max = frames().length; st.value = clip.start + 1;
+    st.onchange = () => { clip.start = clamp(Math.round(+st.value || 1), 1, frames().length) - 1; st.value = clip.start + 1; scheduleSave(); rebuildTimeline(); };
+    const vol = document.createElement('input');
+    vol.type = 'range'; vol.min = 0; vol.max = 150; vol.value = Math.round(clip.volume * 100);
+    const volTxt = document.createElement('span');
+    volTxt.textContent = vol.value + '%';
+    vol.oninput = () => { clip.volume = vol.value / 100; volTxt.textContent = vol.value + '%'; scheduleSave(); };
+    ctrl.append('시작 장면', st, '소리 크기', vol, volTxt);
+    row.append(name, btns, ctrl);
+    list.append(row);
+  }
+}
+
+$('#btnAudio').onclick = async () => {
+  if (playing) stopPlay();
+  renderAudioList();
+  $('#audioSound').checked = prefs.sound;
+  await openDialog($('#dlgAudio'));
+  if (previewNode) { try { previewNode.stop(); } catch { /* 무시 */ } previewNode = null; }
+};
+$('#audioSound').onchange = (e) => { prefs.sound = e.target.checked; savePrefs(); };
+$('#audioAddFile').onclick = () => $('#fileAudio').click();
+$('#fileAudio').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  await addClip(file, file.name.replace(/\.[^.]+$/, '').slice(0, 30), cur);
+});
+
+let recorder = null, recording = false;
+$('#audioRecord').onclick = async () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+    toast('이 브라우저는 녹음을 지원하지 않아요'); return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { toast('마이크를 쓸 수 없어요. 마이크 권한을 허용해 주세요', 3500); return; }
+  $('#dlgAudio').close();
+  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+  const chunks = [];
+  const startFrame = cur;
+  rec.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
+  rec.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(chunks, { type: rec.mimeType || mime || 'audio/webm' });
+    if (blob.size < 500) { toast('녹음된 소리가 없어요'); return; }
+    const n = project.audio.filter((c) => c.rec).length + 1;
+    await addClip(blob, '녹음 ' + n, startFrame, true);
+  };
+  recorder = rec;
+  recording = true;
+  rec.start();
+  $('#btnPlay').classList.add('rec');
+  startPlay();
+  toast('녹음 중이에요. ■ 버튼을 누르면 끝나요', 3500);
+};
+function finishRecording() {
+  recording = false;
+  $('#btnPlay').classList.remove('rec');
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  recorder = null;
+}
+
+async function mixAudio() {
+  if (!project.audio || !project.audio.length) return null;
+  await ensureAudioBuffers();
+  const [, total] = computeStarts();
+  const rate = 48000;
+  const len = Math.ceil(total * rate);
+  if (len <= 0) return null;
+  const oac = new OfflineAudioContext(2, len, rate);
+  let any = false;
+  for (const clip of project.audio) {
+    const buf = audioBuffers.get(clip.id);
+    if (!buf) continue;
+    const st = frameStartTime(clip.start);
+    if (st >= total) continue;
+    const src = oac.createBufferSource();
+    src.buffer = buf;
+    const g = oac.createGain();
+    g.gain.value = clip.volume;
+    src.connect(g).connect(oac.destination);
+    src.start(st);
+    any = true;
+  }
+  return any ? oac.startRendering() : null;
+}
+
+// =====================================================================
 // 재생
 // =====================================================================
-let playing = false, playIdx = 0, playAcc = 0, playLast = 0, playRaf = 0;
+let playing = false, playIdx = 0, playRaf = 0, playT0 = 0, playStarts = [], playTotal = 1;
 function togglePlay() { playing ? stopPlay() : startPlay(); }
-function startPlay() {
-  if (stroke || !project) return;
+async function startPlay() {
+  if (stroke || !project || playing) return;
+  commitFloat();
   commitActive();
+  [playStarts, playTotal] = computeStarts();
   playing = true;
-  playIdx = cur; playAcc = 0; playLast = performance.now();
+  playIdx = cur;
+  playT0 = performance.now() - playStarts[cur] * 1000;
   $('#btnPlay').classList.add('on');
-  $('#btnPlay').textContent = '■';
+  setPlayLabel(true);
   highlightPlay();
   requestRender();
   playRaf = requestAnimationFrame(playTick);
+  if (prefs.sound && project.audio && project.audio.length) {
+    getAC();
+    await ensureAudioBuffers();
+    if (playing) scheduleAudio(((performance.now() - playT0) / 1000) % playTotal, playTotal);
+  }
 }
 function playTick(now) {
   if (!playing) return;
-  let dt = now - playLast;
-  playLast = now;
-  if (dt > 250) dt = 250;
-  playAcc += dt;
-  const fs = frames();
-  let dur = (fs[playIdx].hold * 1000) / project.fps;
-  let changed = false;
-  while (playAcc >= dur) {
-    playAcc -= dur;
-    playIdx = (playIdx + 1) % fs.length;
-    dur = (fs[playIdx].hold * 1000) / project.fps;
-    changed = true;
+  let t = (now - playT0) / 1000;
+  if (t >= playTotal) {
+    const loops = Math.floor(t / playTotal);
+    playT0 += loops * playTotal * 1000;
+    t -= loops * playTotal;
+    if (prefs.sound) scheduleAudio(t, playTotal);
   }
-  if (changed) { highlightPlay(); render(); }
+  const idx = frameAtTime(playStarts, t);
+  if (idx !== playIdx) { playIdx = idx; highlightPlay(); render(); }
   playRaf = requestAnimationFrame(playTick);
 }
 function highlightPlay() {
-  [...framesEl.children].forEach((el, i) => el.classList.toggle('playing', playing && i === playIdx));
+  framesEl.querySelectorAll('.frame').forEach((el, i) => el.classList.toggle('playing', playing && i === playIdx));
+  if (playing) {
+    const el = framesEl.querySelectorAll('.frame')[playIdx];
+    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 }
 function stopPlay() {
   if (!playing) return;
   playing = false;
   cancelAnimationFrame(playRaf);
+  stopAudio();
+  if (recording) finishRecording();
   $('#btnPlay').classList.remove('on');
-  $('#btnPlay').textContent = '▶';
+  setPlayLabel(false);
   highlightPlay();
   requestRender();
+}
+function setPlayLabel(on) {
+  $('#btnPlay').innerHTML = on ? '■<small>멈춤</small>' : '▶<small>재생</small>';
 }
 
 // =====================================================================
@@ -1208,6 +1828,7 @@ function metaOf() {
     id: project.id, name: project.name, width: project.width, height: project.height, fps: project.fps, bg: project.bg,
     layers: project.layers.map((L) => ({ ...L })), frames: project.frames.map((f) => ({ id: f.id, hold: f.hold })),
     cur, layerId, created: project.created, updated: Date.now(), frameCount: project.frames.length,
+    audio: (project.audio || []).map((c) => ({ ...c })),
   };
 }
 async function galleryThumb() {
@@ -1223,6 +1844,7 @@ async function saveNow() {
   if (!project) return;
   clearTimeout(saveTimer);
   if (saving) { saveAgain = true; return; }
+  if (float) { scheduleSave(); return; } // 선택 영역을 옮기는 중에는 확정 후 저장
   saving = true;
   try {
     if (!stroke) commitActive();
@@ -1250,8 +1872,15 @@ async function saveNow() {
     if (saveAgain) { saveAgain = false; scheduleSave(); }
   }
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
-window.addEventListener('pagehide', () => saveNow());
+function flushAndSave() {
+  if (!project) return;
+  if (playing) stopPlay();
+  if (stroke) { if (stroke.kind) cancelStroke(); else endStroke(); }
+  commitFloat();
+  saveNow();
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushAndSave(); });
+window.addEventListener('pagehide', flushAndSave);
 
 // =====================================================================
 // 정보 표시
@@ -1267,25 +1896,33 @@ function updateInfo() {
   const mb = memoryMB();
   $('#projInfo').textContent = `${W}×${H} · ${frames().length}프레임 · 약 ${mb}MB`;
   $('#projInfo').style.color = mb > 1200 ? '#ff7a7a' : '';
-  $('#btnFps').textContent = project.fps + ' fps';
+  $('#fpsNum').textContent = project.fps;
 }
 
 // =====================================================================
 // 도구 UI
 // =====================================================================
 function setTool(t) {
+  if (float && t !== 'select' && t !== 'text') commitFloat();
   prefs.tool = t;
   savePrefs();
   document.querySelectorAll('.tool[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
   syncSliders();
+  updateSelBar();
   requestRender();
 }
 function syncSliders() {
   const k = toolKey();
   $('#sizeRange').value = prefs.size[k];
-  $('#sizeVal').textContent = prefs.size[k];
-  $('#opacityRange').value = prefs.opacity[k];
-  $('#opacityVal').textContent = prefs.opacity[k] + '%';
+  showSizeDot();
+}
+function showSizeDot() {
+  const v = prefs.size[toolKey()];
+  $('#sizeVal').textContent = '굵기 ' + v;
+  const d = clamp(Math.round(Math.sqrt(v) * 2.6), 3, 34);
+  const dot = $('#sizeDot');
+  dot.style.width = d + 'px'; dot.style.height = d + 'px';
+  dot.style.background = prefs.tool === 'eraser' ? '#fff' : prefs.color;
 }
 document.querySelectorAll('.tool[data-tool]').forEach((b) => {
   b.addEventListener('click', () => {
@@ -1295,16 +1932,11 @@ document.querySelectorAll('.tool[data-tool]').forEach((b) => {
 });
 $('#sizeRange').addEventListener('input', (e) => {
   prefs.size[toolKey()] = +e.target.value;
-  $('#sizeVal').textContent = e.target.value;
+  showSizeDot();
   savePrefs();
   const r = view.getBoundingClientRect();
   hover = hover || toDoc({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
   requestRender();
-});
-$('#opacityRange').addEventListener('input', (e) => {
-  prefs.opacity[toolKey()] = +e.target.value;
-  $('#opacityVal').textContent = e.target.value + '%';
-  savePrefs();
 });
 
 const toolPanel = $('#toolPanel');
@@ -1329,28 +1961,46 @@ function toggleToolPanel() {
     i.oninput = () => { fn(+i.value); s.textContent = `${label} ${i.value}`; savePrefs(); };
     l.append(s, i); toolPanel.append(l);
   };
+  const opacitySlider = (key) => slider('진하기', 5, 100, prefs.opacity[key], (v) => { prefs.opacity[key] = v; });
   if (t === 'brush') {
-    h('브러시 종류');
-    const types = [['pen', '펜 (필압 굵기)'], ['pencil', '연필'], ['marker', '마커 (일정 굵기)'], ['airbrush', '에어브러시']];
+    h('붓 종류');
+    const types = [['pen', '✒️ 펜'], ['pencil', '✏️ 연필'], ['marker', '🖍 마커'], ['airbrush', '💨 스프레이']];
     opts(...types.map(([k, n]) => opt(n, prefs.brushType === k, () => { prefs.brushType = k; savePrefs(); })));
-    slider('손떨림 보정', 0, 90, prefs.smooth, (v) => { prefs.smooth = v; });
+    opacitySlider('brush');
+    slider('손떨림 줄이기', 0, 90, prefs.smooth, (v) => { prefs.smooth = v; });
   } else if (t === 'eraser') {
     h('지우개');
+    opacitySlider('eraser');
     const p = document.createElement('p');
     p.style.cssText = 'font-size:13px;color:#9aa3b5;margin:0';
-    p.textContent = '왼쪽 슬라이더로 크기와 세기를 조절해요. S펜 버튼을 누른 채 그려도 지워져요.';
+    p.textContent = '굵기는 왼쪽 막대로 바꿔요. S펜 버튼을 누른 채 그려도 지워져요.';
     toolPanel.append(p);
   } else if (t === 'fill') {
-    h('채우기 기준');
-    opts(opt('모든 레이어 보고 채우기', prefs.fillAll, () => { prefs.fillAll = true; savePrefs(); }),
-      opt('현재 레이어만', !prefs.fillAll, () => { prefs.fillAll = false; savePrefs(); }));
-    slider('허용 오차', 0, 160, prefs.fillTol, (v) => { prefs.fillTol = v; });
+    h('채우기');
+    opts(opt('선 안쪽 채우기', prefs.fillAll, () => { prefs.fillAll = true; savePrefs(); }),
+      opt('이 레이어만 보고 채우기', !prefs.fillAll, () => { prefs.fillAll = false; savePrefs(); }));
+    slider('비슷한 색까지', 0, 160, prefs.fillTol, (v) => { prefs.fillTol = v; });
   } else if (t === 'shape') {
     h('도형');
-    opts(...[['line', '직선'], ['rect', '사각형'], ['ellipse', '원']].map(([k, n]) =>
+    opts(...[['line', '╱ 직선'], ['rect', '▭ 네모'], ['ellipse', '◯ 동그라미']].map(([k, n]) =>
       opt(n, prefs.shapeType === k, () => { prefs.shapeType = k; savePrefs(); updateShapeIcon(); })));
     opts(opt('선만', !prefs.shapeFill, () => { prefs.shapeFill = false; savePrefs(); }),
-      opt('채우기', prefs.shapeFill, () => { prefs.shapeFill = true; savePrefs(); }));
+      opt('속 채우기', prefs.shapeFill, () => { prefs.shapeFill = true; savePrefs(); }));
+    opacitySlider('shape');
+  } else if (t === 'select') {
+    h('선택 방식');
+    opts(opt('자유 선택(올가미)', prefs.selectMode !== 'rect', () => { prefs.selectMode = 'lasso'; savePrefs(); updateSelBar(); }),
+      opt('사각형 선택', prefs.selectMode === 'rect', () => { prefs.selectMode = 'rect'; savePrefs(); updateSelBar(); }));
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:13px;color:#9aa3b5;margin:0';
+    p.textContent = '선택한 뒤 안쪽을 끌면 이동, 모서리 네모로 크기, 위쪽 주황 동그라미로 회전해요.';
+    toolPanel.append(p);
+  } else if (t === 'text') {
+    h('텍스트');
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:13px;color:#9aa3b5;margin:0';
+    p.textContent = '글자를 넣을 위치를 누르세요. 색은 현재 색을 써요.';
+    toolPanel.append(p);
   } else {
     h('스포이트');
     const p = document.createElement('p');
@@ -1361,7 +2011,7 @@ function toggleToolPanel() {
   toolPanel.hidden = false;
 }
 function updateShapeIcon() {
-  $('.tool[data-tool="shape"]').textContent = { line: '╱', rect: '▭', ellipse: '◯' }[prefs.shapeType];
+  $('.tool[data-tool="shape"] .ico').textContent = { line: '╱', rect: '▭', ellipse: '◯' }[prefs.shapeType];
 }
 
 // ---------- 색 ----------
@@ -1373,6 +2023,7 @@ function setColor(hex, addRecent = false) {
   }
   savePrefs();
   rebuildBrushMaterials();
+  showSizeDot();
 }
 
 const hsv = { h: 0, s: 0, v: 0 };
@@ -1476,18 +2127,28 @@ function longPress(el, onTap, onLong) {
   el.addEventListener('click', () => { if (!fired) onTap(); });
   el.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 }
-let onionHintShown = false;
 longPress($('#btnOnion'), () => {
   prefs.onion = !prefs.onion; savePrefs(); updateToggles(); rebuildOnion(); requestRender();
-  if (!onionHintShown) { onionHintShown = true; toast('길게 누르면 어니언 스킨 설정이 열려요'); }
+  toast(prefs.onion ? '겹쳐보기 켬: 앞 장면은 빨강, 뒤 장면은 초록으로 보여요' : '겹쳐보기 끔', 1800);
 }, openOnionDialog);
-longPress($('#btnGrid'), () => { prefs.grid = !prefs.grid; savePrefs(); updateToggles(); requestRender(); }, openOnionDialog);
+const moreMenu = $('#moreMenu');
+function closeMenus() { moreMenu.hidden = true; closeToolPanel(); }
+$('#btnMore').onclick = () => { const open = moreMenu.hidden; closeMenus(); moreMenu.hidden = !open; updateInfo(); };
+$('#btnGrid').onclick = () => { prefs.grid = !prefs.grid; savePrefs(); updateToggles(); requestRender(); };
+$('#btnOnionSet').onclick = () => { moreMenu.hidden = true; openOnionDialog(); };
 $('#btnPenOnly').onclick = () => {
   prefs.penOnly = !prefs.penOnly; savePrefs(); updateToggles();
-  toast(prefs.penOnly ? '펜 전용: 손가락은 이동·확대만 해요' : '손가락으로도 그릴 수 있어요');
+  toast(prefs.penOnly ? '펜으로만 그려요. 손가락은 움직이기·확대만 해요' : '손가락으로도 그릴 수 있어요');
 };
-$('#btnLayers').onclick = () => { prefs.layersOpen = !prefs.layersOpen; savePrefs(); updateToggles(); setTimeout(resizeView, 0); };
-$('#btnFit').onclick = fitView;
+$('#btnLayers').onclick = () => { prefs.layersOpen = !prefs.layersOpen; savePrefs(); updateToggles(); };
+$('#layersClose').onclick = () => { prefs.layersOpen = false; savePrefs(); updateToggles(); };
+$('#btnFit').onclick = () => { moreMenu.hidden = true; fitView(); };
+$('#btnFullscreen').onclick = () => {
+  moreMenu.hidden = true;
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => toast('전체 화면을 쓸 수 없어요'));
+};
+$('#btnHelp').onclick = () => { moreMenu.hidden = true; openDialog($('#dlgHelp')); };
 $('#btnUndo').onclick = undo;
 $('#btnRedo').onclick = redo;
 $('#btnPlay').onclick = togglePlay;
@@ -1546,81 +2207,91 @@ $('#fileImage').addEventListener('change', async (e) => {
 });
 
 // =====================================================================
-// FPS 대화상자
+// 빠르기(FPS) — 초등학생도 이해할 수 있는 설명과 함께 고르기
 // =====================================================================
-$('#btnFps').onclick = async () => {
-  const box = $('#fpsPresets');
+const FPS_INFO = [
+  [4, '아주 느리게', '그림책을 한 장씩 넘기는 느낌'],
+  [6, '느리게', '뚝뚝 끊기는 재미있는 움직임'],
+  [8, '조금 느리게', '처음 해 보기 좋아요'],
+  [12, '추천', '손그림 애니메이션의 기본 빠르기'],
+  [24, '부드럽게', '만화영화처럼 부드러워요 · 그림이 많이 필요해요'],
+  [30, '아주 부드럽게', '동영상처럼 매끄러워요 · 그림이 아주 많이 필요해요'],
+];
+function renderFpsCards(box, current, onPick) {
   box.textContent = '';
-  const input = $('#fpsInput');
-  input.value = project.fps;
-  for (const f of FPS_PRESETS) {
+  for (const [n, title, desc] of FPS_INFO) {
     const b = document.createElement('button');
-    b.type = 'button'; b.textContent = f;
-    if (f === project.fps) b.classList.add('on');
-    b.onclick = () => { input.value = f; box.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); };
+    b.type = 'button';
+    b.className = 'fps-card' + (n === current ? ' on' : '') + (n === 12 ? ' rec' : '');
+    b.dataset.fps = n;
+    b.innerHTML = `<span class="n">${n}</span><span class="t">${title}</span><span class="d">${desc}</span>`;
+    b.onclick = () => {
+      box.querySelectorAll('.fps-card').forEach((x) => x.classList.toggle('on', x === b));
+      onPick(n);
+    };
     box.append(b);
   }
+}
+function fpsCalcText(fps) {
+  const ticks = frames().reduce((a, f) => a + f.hold, 0);
+  return `지금 작품은 장면 ${frames().length}개 → ${fps} FPS로 재생하면 약 ${(ticks / fps).toFixed(1)}초예요. 1초를 채우려면 그림 ${fps}장이 필요해요.`;
+}
+$('#btnFps').onclick = async () => {
+  if (playing) stopPlay();
+  const input = $('#fpsInput');
+  input.value = project.fps;
+  const upd = (v) => { input.value = v; $('#fpsCalc').textContent = fpsCalcText(v); };
+  renderFpsCards($('#fpsPresets'), project.fps, upd);
+  input.oninput = () => {
+    const v = clamp(Math.round(+input.value || 1), 1, 60);
+    $('#fpsPresets').querySelectorAll('.fps-card').forEach((x) => x.classList.toggle('on', +x.dataset.fps === v));
+    $('#fpsCalc').textContent = fpsCalcText(v);
+  };
+  upd(project.fps);
   if ((await openDialog($('#dlgFps'))) === 'ok') {
     const v = clamp(Math.round(+input.value || 12), 1, 60);
     project.fps = v;
     updateInfo();
+    rebuildTimeline();
     scheduleSave();
-    toast(`${v} FPS로 바꿨어요`);
+    toast(`빠르기를 ${v} FPS로 바꿨어요`);
   }
 };
 
 // =====================================================================
-// 프로젝트 만들기 / 설정 대화상자
+// 새 작품 / 작품 설정 대화상자 (가로 HD · 세로 HD)
 // =====================================================================
-function setupSizePresets() {
-  const box = $('#sizePresets');
-  box.textContent = '';
-  for (const [name, w, h] of SIZE_PRESETS) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.innerHTML = `${name}<small>${w}×${h}</small>`;
-    b.dataset.w = w; b.dataset.h = h;
-    b.onclick = () => { $('#pW').value = w; $('#pH').value = h; projDlgUpdate(); };
-    box.append(b);
-  }
-}
-function projDlgUpdate() {
-  const w = +$('#pW').value, h = +$('#pH').value;
-  $('#sizePresets').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.w === w && +b.dataset.h === h));
-  let warn = '';
-  if (w * h > 1920 * 1200) warn = '큰 크기는 태블릿 메모리를 많이 써요. 짧은 작품에만 추천해요.';
-  if (w % 2 || h % 2) warn = 'MP4는 짝수 크기만 돼요. 만들 때 자동으로 짝수로 맞춰요.';
-  $('#pWarn').textContent = warn;
-}
-$('#pW').addEventListener('input', projDlgUpdate);
-$('#pH').addEventListener('input', projDlgUpdate);
-$('#pSwap').onclick = () => { const w = $('#pW').value; $('#pW').value = $('#pH').value; $('#pH').value = w; projDlgUpdate(); };
-
+const ORIENTS = { land: [1280, 720], port: [720, 1280] };
 async function projectDialog(mode) {
-  setupSizePresets();
   const editing = mode === 'edit';
-  $('#dlgProjectTitle').textContent = editing ? '프로젝트 설정' : '새 프로젝트';
-  $('#pOk').textContent = editing ? '적용' : '만들기';
-  $('#resizeModeRow').hidden = !editing;
-  if (editing) {
-    $('#pName').value = project.name; $('#pW').value = project.width; $('#pH').value = project.height;
-    $('#pFps').value = project.fps; $('#pBg').value = project.bg;
-  } else {
-    $('#pName').value = '새 애니메이션'; $('#pW').value = 1920; $('#pH').value = 1080; $('#pFps').value = 12; $('#pBg').value = '#ffffff';
-  }
-  projDlgUpdate();
+  $('#dlgProjectTitle').textContent = editing ? '작품 설정' : '새 작품';
+  $('#pOk').textContent = editing ? '바꾸기' : '만들기';
+  let size = editing ? [project.width, project.height] : ORIENTS.land;
+  let fps = editing ? project.fps : 12;
+  $('#pName').value = editing ? project.name : '새 애니메이션';
+  $('#pBg').value = editing ? project.bg : '#ffffff';
+  const btns = [...document.querySelectorAll('.orient-btn')];
+  const sync = () => {
+    btns.forEach((b) => b.classList.toggle('on', +b.dataset.w === size[0] && +b.dataset.h === size[1]));
+    const changed = editing && (size[0] !== project.width || size[1] !== project.height);
+    $('#resizeModeRow').hidden = !changed;
+    const known = btns.some((b) => +b.dataset.w === size[0] && +b.dataset.h === size[1]);
+    $('#pCurSize').textContent = editing && !known ? `지금 크기: ${size[0]}×${size[1]}` : '';
+  };
+  btns.forEach((b) => { b.onclick = () => { size = [+b.dataset.w, +b.dataset.h]; sync(); }; });
+  renderFpsCards($('#pFpsList'), fps, (v) => { fps = v; });
+  sync();
   if ((await openDialog($('#dlgProject'))) !== 'ok') return null;
   return {
     name: $('#pName').value.trim() || '새 애니메이션',
-    width: clamp(even(+$('#pW').value || 1920), 16, 3840),
-    height: clamp(even(+$('#pH').value || 1080), 16, 3840),
-    fps: clamp(Math.round(+$('#pFps').value || 12), 1, 60),
+    width: size[0], height: size[1], fps,
     bg: $('#pBg').value,
     mode: (document.querySelector('input[name=rmode]:checked') || {}).value || 'fit',
   };
 }
 
 $('#btnSettings').onclick = async () => {
+  moreMenu.hidden = true;
   if (playing) stopPlay();
   const r = await projectDialog('edit');
   if (!r) return;
@@ -1684,6 +2355,7 @@ function exportInfo() {
     else if (recorderAvailable()) txt += ' · 이 브라우저는 실시간 녹화 방식으로 만들어요(WebM일 수 있음)';
     else txt += ' · ⚠ 이 브라우저는 영상 만들기를 지원하지 않아요';
     if (ew > 4096 || eh > 4096) txt += ' · ⚠ 4096px를 넘으면 실패할 수 있어요';
+    if (project.audio && project.audio.length) txt += ` · 소리 ${project.audio.length}개 포함`;
   }
   if (fmt === 'gif' && ew * eh > 1280 * 720) txt += ' · GIF는 크기가 크면 오래 걸려요(0.5배 추천)';
   $('#exInfo').textContent = txt;
@@ -1693,6 +2365,7 @@ $('#formExport').addEventListener('change', exportInfo);
 
 $('#btnExport').onclick = async () => {
   if (playing) stopPlay();
+  commitFloat();
   commitActive();
   $('#exResult').hidden = true;
   $('#exProgress').hidden = true;
@@ -1729,7 +2402,11 @@ $('#exStart').onclick = async () => {
   $('#exStart').disabled = true;
   $('#exResult').hidden = true;
   exportAbort = new AbortController();
-  const opts = { width: ew, height: eh, fps: project.fps, frames: fs, drawFrame: draw, onProgress, signal: exportAbort.signal };
+  let audio = null;
+  if (fmt === 'mp4') {
+    try { audio = await mixAudio(); } catch (e) { console.warn(e); toast('소리를 섞지 못해서 소리 없이 만들어요', 3000); }
+  }
+  const opts = { width: ew, height: eh, fps: project.fps, frames: fs, drawFrame: draw, onProgress, signal: exportAbort.signal, audio };
   const base = (project.name.replace(/[\\/:*?"<>|]/g, '').trim() || 'animate') + '_' + stamp();
   let blob, name;
   try {
@@ -1781,6 +2458,7 @@ $('#exStart').onclick = async () => {
   }
   exportAbort = null;
   $('#exStart').disabled = false;
+  if (blob.note) toast(blob.note, 4000);
   showExportResult(blob, name);
 };
 
@@ -1833,8 +2511,11 @@ let galleryUrls = [];
 async function showGallery() {
   if (project) {
     stopPlay();
+    commitFloat();
     await saveNow();
   }
+  float = null;
+  $('#selBar').hidden = true;
   project = null;
   active = null;
   clearHistory();
@@ -1894,8 +2575,9 @@ $('#galNew').onclick = async () => {
   const L = newLayer('레이어 1');
   const p = {
     id: uid(), name: r.name, width: r.width, height: r.height, fps: r.fps, bg: r.bg,
-    layers: [L], frames: [newFrame()], created: Date.now(),
+    layers: [L], frames: [newFrame()], created: Date.now(), audio: [],
   };
+  audioBlobs.clear(); audioBuffers.clear();
   enterEditor(p, new Map(), 0, L.id);
   await saveNow();
 };
@@ -1907,7 +2589,7 @@ $('#galFullscreen').onclick = () => {
 async function openProject(pid) {
   toast('불러오는 중…', 10000);
   try {
-    const { meta, cels } = await store.loadProject(pid);
+    const { meta, cels, audio } = await store.loadProject(pid);
     if (!meta) throw new Error('프로젝트가 없어요');
     const p = { ...meta, frames: meta.frames.map((f) => ({ id: f.id, hold: f.hold || 1, cels: {} })) };
     delete p.thumb;
@@ -1925,6 +2607,10 @@ async function openProject(pid) {
       f.cels[rec.lid] = cel;
       savedMap.set(rec.key, cel);
     }
+    p.audio = meta.audio || [];
+    audioBlobs.clear(); audioBuffers.clear();
+    for (const rec of audio || []) audioBlobs.set(rec.cid, rec.blob);
+    p.audio = p.audio.filter((c) => audioBlobs.has(c.id));
     const lid = lids.has(meta.layerId) ? meta.layerId : p.layers[0].id;
     enterEditor(p, savedMap, clamp(meta.cur || 0, 0, p.frames.length - 1), lid);
     toast('불러왔어요', 900);
@@ -1943,7 +2629,10 @@ function enterEditor(p, savedMap, fi, lid) {
   clearHistory();
   $('#gallery').hidden = true;
   $('#editor').hidden = false;
+  setPlayLabel(false);
   updateToggles();
+  updateSelBar();
+  syncSliders();
   resizeView();
   loadActive();
   rebuildTimeline();

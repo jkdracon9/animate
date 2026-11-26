@@ -20,92 +20,105 @@
     <div class="brand"><img src="icons/icon-192.png" alt=""><span>animate</span></div>
     <div class="spacer"></div>
     <button id="galFullscreen" class="btn ghost" title="전체 화면">⛶</button>
-    <button id="galNew" class="btn primary">＋ 새 프로젝트</button>
+    <button id="galNew" class="btn primary big">＋ 새 작품 만들기</button>
   </header>
   <div id="galList" class="gal-list"></div>
-  <p id="galEmpty" class="gal-empty" hidden>아직 프로젝트가 없어요. <b>＋ 새 프로젝트</b>를 눌러 시작하세요.</p>
+  <p id="galEmpty" class="gal-empty" hidden>아직 작품이 없어요. <b>＋ 새 작품 만들기</b>를 눌러 시작해요!</p>
   <footer id="galStorage" class="gal-foot"></footer>
 </section>
 
 <!-- ===== 편집기 ===== -->
 <section id="editor" class="screen" hidden>
   <header id="topbar">
-    <button id="btnBack" class="tb" title="갤러리">☰</button>
+    <button id="btnBack" class="tb lbl" title="작품 목록">🏠<small>작품들</small></button>
     <button id="projName" class="proj-name" title="이름 바꾸기"></button>
-    <span id="projInfo" class="proj-info"></span>
     <div class="spacer"></div>
-    <button id="btnUndo" class="tb" title="실행취소 (두 손가락 탭)">↶</button>
-    <button id="btnRedo" class="tb" title="다시실행 (세 손가락 탭)">↷</button>
+    <button id="btnUndo" class="tb lbl" title="되돌리기 (두 손가락 톡)">↶<small>되돌리기</small></button>
+    <button id="btnRedo" class="tb lbl" title="다시 하기 (세 손가락 톡)">↷<small>다시</small></button>
     <span class="sep"></span>
-    <button id="btnOnion" class="tb toggle" title="어니언 스킨">🧅</button>
-    <button id="btnGrid" class="tb toggle" title="격자">#</button>
-    <button id="btnPenOnly" class="tb toggle" title="펜 전용(손가락은 이동/확대)">✒️</button>
-    <button id="btnFit" class="tb" title="화면에 맞추기">⤢</button>
-    <span class="sep"></span>
-    <button id="btnPlay" class="tb play" title="재생">▶</button>
-    <button id="btnFps" class="tb fps" title="FPS"></button>
-    <span class="sep"></span>
-    <button id="btnSettings" class="tb" title="프로젝트 설정">⚙</button>
-    <button id="btnLayers" class="tb toggle" title="레이어">▤</button>
-    <button id="btnExport" class="tb primary" title="내보내기">⤓ 내보내기</button>
+    <button id="btnOnion" class="tb lbl toggle" title="앞뒤 장면 겹쳐 보기">🧅<small>겹쳐보기</small></button>
+    <button id="btnPlay" class="tb lbl play" title="재생">▶<small>재생</small></button>
+    <button id="btnFps" class="tb lbl fps" title="빠르기(FPS)"><b id="fpsNum">12</b><small>빠르기</small></button>
+    <button id="btnAudio" class="tb lbl" title="소리">🎵<small>소리</small></button>
+    <button id="btnLayers" class="tb lbl toggle" title="레이어">📚<small>레이어</small></button>
+    <button id="btnMore" class="tb lbl" title="더보기">⚙️<small>설정</small></button>
+    <button id="btnExport" class="tb lbl primary" title="영상 만들기">🎬<small>영상 만들기</small></button>
   </header>
 
   <aside id="tools">
-    <button class="tool" data-tool="brush" title="브러시">✏️</button>
-    <button class="tool" data-tool="eraser" title="지우개">🩹</button>
-    <button class="tool" data-tool="fill" title="채우기">🪣</button>
-    <button class="tool" data-tool="picker" title="스포이트">💧</button>
-    <button class="tool" data-tool="shape" title="도형">⬭</button>
-    <button id="btnImport" class="tool" title="이미지 가져오기">🖼️</button>
+    <button class="tool" data-tool="brush" title="붓"><span class="ico">✏️</span><small>붓</small></button>
+    <button class="tool" data-tool="eraser" title="지우개"><span class="ico">🩹</span><small>지우개</small></button>
+    <button class="tool" data-tool="fill" title="채우기"><span class="ico">🪣</span><small>채우기</small></button>
+    <button class="tool" data-tool="shape" title="도형"><span class="ico">⬭</span><small>도형</small></button>
+    <button class="tool" data-tool="text" title="글자"><span class="ico">🔤</span><small>글자</small></button>
+    <button class="tool" data-tool="select" title="골라서 옮기기"><span class="ico">✂️</span><small>옮기기</small></button>
+    <button class="tool" data-tool="picker" title="색 뽑기"><span class="ico">💧</span><small>색 뽑기</small></button>
+    <button id="btnImport" class="tool" title="사진 넣기"><span class="ico">🖼️</span><small>사진</small></button>
     <div class="tool-sep"></div>
-    <button id="colorBtn" class="color-btn" title="색"><span id="colorChip"></span></button>
-    <div class="vslider"><input type="range" id="sizeRange" min="1" max="200" value="8"><span id="sizeVal">8</span></div>
-    <div class="vslider"><input type="range" id="opacityRange" min="5" max="100" value="100"><span id="opacityVal">100%</span></div>
+    <button id="colorBtn" class="color-btn" title="색 고르기"><span id="colorChip"></span></button>
+    <small class="tool-cap">색</small>
+    <div class="vslider"><input type="range" id="sizeRange" min="1" max="200" value="8"><span id="sizeDot" class="size-dot"></span><small id="sizeVal">8</small></div>
   </aside>
 
   <main id="stage">
     <canvas id="view"></canvas>
     <div id="toolPanel" class="popover" hidden></div>
+    <div id="moreMenu" class="popover menu" hidden>
+      <span id="projInfo" class="proj-info"></span>
+      <button id="btnGrid" class="menu-item toggle">#<span>격자 보기</span></button>
+      <button id="btnPenOnly" class="menu-item toggle">✒️<span>펜으로만 그리기<small>손가락은 움직이기·확대만</small></span></button>
+      <button id="btnOnionSet" class="menu-item">🧅<span>겹쳐보기·격자 설정</span></button>
+      <button id="btnFit" class="menu-item">⤢<span>그림판 화면에 맞추기</span></button>
+      <button id="btnSettings" class="menu-item">🖼️<span>작품 설정<small>화면 방향 · 빠르기 · 배경색</small></span></button>
+      <button id="btnFullscreen" class="menu-item">⛶<span>전체 화면</span></button>
+      <button id="btnHelp" class="menu-item">❓<span>사용법</span></button>
+    </div>
+    <div id="selBar" class="selbar" hidden></div>
     <div id="hud" class="hud"></div>
-  </main>
 
-  <aside id="layers" hidden>
-    <div class="panel-head">
-      <b>레이어</b>
-      <div class="spacer"></div>
-      <button id="layerAdd" class="mini" title="레이어 추가">＋</button>
-      <button id="layerDup" class="mini" title="복제">⧉</button>
-      <button id="layerMerge" class="mini" title="아래 레이어와 합치기">⤓</button>
-      <button id="layerDel" class="mini" title="삭제">🗑</button>
-    </div>
-    <div id="layerList" class="layer-list"></div>
-    <div class="layer-opts">
-      <label>불투명도 <span id="layerOpVal">100%</span></label>
-      <input type="range" id="layerOpacity" min="0" max="100" value="100">
-      <div class="row">
-        <button id="layerUp" class="mini wide">▲ 위로</button>
-        <button id="layerDown" class="mini wide">▼ 아래로</button>
+    <aside id="layers" hidden>
+      <div class="panel-head">
+        <b>레이어</b>
+        <div class="spacer"></div>
+        <button id="layersClose" class="mini" title="닫기">✕</button>
       </div>
-    </div>
-  </aside>
+      <div class="layer-btns">
+        <button id="layerAdd" class="mini lblm">＋<small>새로</small></button>
+        <button id="layerDup" class="mini lblm">⧉<small>복제</small></button>
+        <button id="layerMerge" class="mini lblm">⤓<small>합치기</small></button>
+        <button id="layerDel" class="mini lblm">🗑<small>지우기</small></button>
+      </div>
+      <div id="layerList" class="layer-list"></div>
+      <div class="layer-opts">
+        <label>진하기 <span id="layerOpVal">100%</span></label>
+        <input type="range" id="layerOpacity" min="0" max="100" value="100">
+        <div class="row">
+          <button id="layerUp" class="mini wide">▲ 위로</button>
+          <button id="layerDown" class="mini wide">▼ 아래로</button>
+        </div>
+      </div>
+    </aside>
+  </main>
 
   <footer id="timeline">
     <div class="tl-buttons">
-      <button id="frAdd" class="mini" title="새 프레임">＋</button>
-      <button id="frDup" class="mini" title="프레임 복제">⧉</button>
-      <button id="frDel" class="mini" title="프레임 삭제">🗑</button>
-      <button id="frCopy" class="mini" title="복사">📋</button>
-      <button id="frPaste" class="mini" title="붙여넣기">📥</button>
-      <button id="frLeft" class="mini" title="앞으로 이동">◀</button>
-      <button id="frRight" class="mini" title="뒤로 이동">▶</button>
-      <div class="hold">
+      <button id="frAdd" class="mini lblm" title="새 장면">＋<small>새 장면</small></button>
+      <button id="frDup" class="mini lblm" title="장면 복제">⧉<small>복제</small></button>
+      <button id="frDel" class="mini lblm" title="장면 지우기">🗑<small>지우기</small></button>
+      <div class="hold" title="이 장면이 보이는 시간">
         <button id="holdMinus" class="mini">−</button>
-        <span id="holdVal" title="이 프레임이 보이는 길이(프레임 수)">×1</span>
+        <span><b id="holdVal">×1</b><small>시간</small></span>
         <button id="holdPlus" class="mini">＋</button>
       </div>
-      <span id="frPos" class="fr-pos"></span>
+      <button id="frLeft" class="mini lblm" title="장면을 앞으로">◀<small>앞으로</small></button>
+      <button id="frRight" class="mini lblm" title="장면을 뒤로">▶<small>뒤로</small></button>
+      <button id="frCopy" class="mini lblm" title="장면 복사">📋<small>복사</small></button>
+      <button id="frPaste" class="mini lblm" title="장면 붙이기">📥<small>붙이기</small></button>
     </div>
-    <div id="frames" class="frames"></div>
+    <div class="tl-strip">
+      <span id="frPos" class="fr-pos"></span>
+      <div id="frames" class="frames"></div>
+    </div>
   </footer>
 </section>
 
@@ -115,28 +128,26 @@
 <!-- ===== 대화상자 ===== -->
 <dialog id="dlgProject" class="dlg">
   <form method="dialog" id="formProject">
-    <h2 id="dlgProjectTitle">새 프로젝트</h2>
-    <label class="field">이름 <input id="pName" maxlength="40" value="새 애니메이션"></label>
-    <div class="field"><span>영상 크기</span>
-      <div class="presets" id="sizePresets"></div>
+    <h2 id="dlgProjectTitle">새 작품</h2>
+    <label class="field">작품 이름 <input id="pName" maxlength="40" value="새 애니메이션"></label>
+    <div class="field"><span>화면 방향</span>
+      <div class="orient" id="orientPick">
+        <button type="button" class="orient-btn" data-w="1280" data-h="720"><span class="shape land"></span><b>가로 화면</b><small>1280×720 · 유튜브, TV</small></button>
+        <button type="button" class="orient-btn" data-w="720" data-h="1280"><span class="shape port"></span><b>세로 화면</b><small>720×1280 · 쇼츠, 릴스</small></button>
+      </div>
+      <small id="pCurSize" class="info"></small>
     </div>
-    <div class="field row">
-      <label>가로 <input type="number" id="pW" min="16" max="3840" step="2" value="1920"></label>
-      <button type="button" id="pSwap" class="mini" title="가로↔세로">⇄</button>
-      <label>세로 <input type="number" id="pH" min="16" max="3840" step="2" value="1080"></label>
+    <div class="field"><span>빠르기 (FPS)</span>
+      <div id="pFpsList" class="fps-list"></div>
     </div>
-    <div class="field row">
-      <label>FPS <input type="number" id="pFps" min="1" max="60" value="12"></label>
-      <label>배경색 <input type="color" id="pBg" value="#ffffff"></label>
-    </div>
-    <div class="field" id="resizeModeRow" hidden><span>크기를 바꿀 때 기존 그림</span>
+    <label class="field">배경색 <input type="color" id="pBg" value="#ffffff"></label>
+    <div class="field" id="resizeModeRow" hidden><span>방향을 바꾸면 지금 그림은</span>
       <div class="seg" id="resizeMode">
-        <label><input type="radio" name="rmode" value="fit" checked> 맞추기</label>
+        <label><input type="radio" name="rmode" value="fit" checked> 작게 맞추기</label>
         <label><input type="radio" name="rmode" value="stretch"> 늘리기</label>
-        <label><input type="radio" name="rmode" value="crop"> 자르기(가운데)</label>
+        <label><input type="radio" name="rmode" value="crop"> 가운데만 남기기</label>
       </div>
     </div>
-    <p id="pWarn" class="warn"></p>
     <div class="actions">
       <button value="cancel" class="btn ghost">취소</button>
       <button value="ok" class="btn primary" id="pOk">만들기</button>
@@ -144,15 +155,36 @@
   </form>
 </dialog>
 
-<dialog id="dlgFps" class="dlg small">
+<dialog id="dlgFps" class="dlg">
   <form method="dialog">
-    <h2>재생 속도 (FPS)</h2>
-    <div class="presets" id="fpsPresets"></div>
-    <label class="field">직접 입력 (1~60) <input type="number" id="fpsInput" min="1" max="60"></label>
+    <h2>빠르기 (FPS)</h2>
+    <p class="fps-explain">FPS는 <b>1초 동안 보여 주는 그림 장수</b>예요.<br>
+      12 FPS면 그림 12장이 1초 동안 휙 지나가요.<br>
+      숫자가 <b>작으면 느리고</b>, <b>크면 부드럽지만</b> 그림을 더 많이 그려야 해요.</p>
+    <div id="fpsPresets" class="fps-list"></div>
+    <label class="field row-inline">직접 정하기 (1~60) <input type="number" id="fpsInput" min="1" max="60"></label>
+    <p id="fpsCalc" class="info"></p>
     <div class="actions">
       <button value="cancel" class="btn ghost">취소</button>
-      <button value="ok" class="btn primary">적용</button>
+      <button value="ok" class="btn primary">정하기</button>
     </div>
+  </form>
+</dialog>
+
+<dialog id="dlgHelp" class="dlg">
+  <form method="dialog">
+    <h2>사용법</h2>
+    <ul class="help">
+      <li><b>✏️ 붓</b>으로 그리고, <b>＋ 새 장면</b>을 눌러 다음 그림을 그려요.</li>
+      <li><b>🧅 겹쳐보기</b>를 켜면 앞 장면이 빨갛게, 뒤 장면이 초록색으로 흐리게 보여요.</li>
+      <li><b>▶ 재생</b>을 누르면 그림이 움직여요. <b>빠르기</b>로 속도를 바꿔요.</li>
+      <li>선택한 도구를 <b>한 번 더 누르면</b> 붓 종류 같은 설정이 나와요.</li>
+      <li><b>두 손가락</b>으로 벌리면 크게, 돌리면 그림판이 돌아가요.</li>
+      <li><b>두 손가락 톡</b> = 되돌리기, <b>세 손가락 톡</b> = 다시 하기</li>
+      <li>S펜 버튼을 누른 채 그리면 지우개가 돼요.</li>
+      <li>다 만들면 <b>🎬 영상 만들기</b>로 MP4 영상을 저장해요.</li>
+    </ul>
+    <div class="actions"><button value="ok" class="btn primary">알겠어요</button></div>
   </form>
 </dialog>
 
@@ -191,13 +223,13 @@
 
 <dialog id="dlgExport" class="dlg">
   <form method="dialog" id="formExport">
-    <h2>내보내기</h2>
+    <h2>영상 만들기</h2>
     <div class="field"><span>형식</span>
       <div class="seg" id="exFormat">
-        <label><input type="radio" name="exf" value="mp4" checked> MP4 영상</label>
-        <label><input type="radio" name="exf" value="gif"> GIF</label>
-        <label><input type="radio" name="exf" value="png"> PNG 묶음(ZIP)</label>
-        <label><input type="radio" name="exf" value="frame"> 현재 프레임 PNG</label>
+        <label><input type="radio" name="exf" value="mp4" checked> 🎬 영상 (MP4)</label>
+        <label><input type="radio" name="exf" value="gif"> 🔁 움짤 (GIF)</label>
+        <label><input type="radio" name="exf" value="png"> 🗂 장면 그림 묶음 (PNG)</label>
+        <label><input type="radio" name="exf" value="frame"> 🖼 지금 장면 그림</label>
       </div>
     </div>
     <div class="field"><span>해상도</span>
@@ -213,10 +245,53 @@
     <div id="exResult" class="ex-result" hidden></div>
     <div class="actions">
       <button value="cancel" class="btn ghost" id="exClose">닫기</button>
-      <button type="button" class="btn primary" id="exStart">내보내기 시작</button>
+      <button type="button" class="btn primary" id="exStart">만들기 시작</button>
     </div>
   </form>
 </dialog>
+
+<dialog id="dlgText" class="dlg">
+  <form method="dialog">
+    <h2>텍스트</h2>
+    <textarea id="textInput" class="full textarea" rows="3" placeholder="글자를 입력하세요"></textarea>
+    <div class="field row">
+      <label>글꼴
+        <select id="textFont">
+          <option value="sans-serif">고딕</option>
+          <option value="serif">명조</option>
+          <option value="cursive">손글씨</option>
+          <option value="monospace">고정폭</option>
+        </select>
+      </label>
+      <label>크기 <input type="number" id="textSize" min="8" max="600" value="72"></label>
+    </div>
+    <div class="field row">
+      <label class="check-inline"><input type="checkbox" id="textBold"> 굵게</label>
+      <label class="check-inline"><input type="checkbox" id="textOutline"> 흰 테두리</label>
+    </div>
+    <p class="info">넣은 뒤에 끌어서 옮기고, 모서리로 크기, 위쪽 동그라미로 회전할 수 있어요.</p>
+    <div class="actions">
+      <button value="cancel" class="btn ghost">취소</button>
+      <button value="ok" class="btn primary">넣기</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgAudio" class="dlg">
+  <form method="dialog">
+    <h2>소리</h2>
+    <div id="audioList" class="audio-list"></div>
+    <p id="audioEmpty" class="info">아직 소리가 없어요. 음악 파일을 불러오거나 녹음해 보세요.</p>
+    <div class="row wrap">
+      <button type="button" id="audioAddFile" class="btn">🎵 음악 파일 불러오기</button>
+      <button type="button" id="audioRecord" class="btn danger">🎙 현재 프레임부터 녹음</button>
+    </div>
+    <label class="field check"><input type="checkbox" id="audioSound"> 재생할 때 소리 듣기</label>
+    <p class="info">녹음은 애니메이션이 재생되는 동안 이어져요. ■ 버튼을 누르면 끝나요. 이어폰을 쓰면 음악이 녹음에 섞이지 않아요.</p>
+    <div class="actions"><button value="ok" class="btn primary">닫기</button></div>
+  </form>
+</dialog>
+<input type="file" id="fileAudio" accept="audio/*,video/mp4" hidden>
 
 <dialog id="dlgConfirm" class="dlg small">
   <form method="dialog">
