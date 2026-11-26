@@ -57,7 +57,8 @@
     <div class="tool-sep"></div>
     <button id="colorBtn" class="color-btn" title="색 고르기"><span id="colorChip"></span></button>
     <small class="tool-cap">색</small>
-    <div class="vslider"><input type="range" id="sizeRange" min="1" max="200" value="8"><span id="sizeDot" class="size-dot"></span><small id="sizeVal">8</small></div>
+    <button id="sizeBtn" class="size-btn" title="굵기"><span id="sizeDot" class="size-dot"></span></button>
+    <small id="sizeVal" class="tool-cap">굵기</small>
   </aside>
 
   <main id="stage">
@@ -65,8 +66,8 @@
     <div id="toolPanel" class="popover" hidden></div>
     <div id="moreMenu" class="popover menu" hidden>
       <span id="projInfo" class="proj-info"></span>
-      <button id="btnGrid" class="menu-item toggle">#<span>격자 보기</span></button>
-      <button id="btnPenOnly" class="menu-item toggle">✒️<span>펜으로만 그리기<small>손가락은 움직이기·확대만</small></span></button>
+      <button id="btnGrid" class="menu-item toggle">#<span>격자 보기</span><em class="pill"></em></button>
+      <button id="btnPenOnly" class="menu-item toggle">✒️<span>펜으로만 그리기<small>손가락은 움직이기·확대만</small></span><em class="pill"></em></button>
       <button id="btnOnionSet" class="menu-item">🧅<span>겹쳐보기·격자 설정</span></button>
       <button id="btnFit" class="menu-item">⤢<span>그림판 화면에 맞추기</span></button>
       <button id="btnSettings" class="menu-item">🖼️<span>작품 설정<small>화면 방향 · 빠르기 · 배경색</small></span></button>
@@ -75,6 +76,7 @@
     </div>
     <div id="selBar" class="selbar" hidden></div>
     <div id="hud" class="hud"></div>
+    <span id="frPos" class="fr-pos"></span>
 
     <aside id="layers" hidden>
       <div class="panel-head">
@@ -102,7 +104,6 @@
 
   <footer id="timeline">
     <div class="tl-strip">
-      <span id="frPos" class="fr-pos"></span>
       <div id="frames" class="frames"></div>
     </div>
   </footer>
@@ -112,7 +113,7 @@
     <button id="fmDel" class="mini lblm">🗑<small>지우기</small></button>
     <div class="hold" title="이 장면이 보이는 시간">
       <button id="holdMinus" class="mini">−</button>
-      <span><b id="holdVal">×1</b><small>시간</small></span>
+      <span><b id="holdVal">1칸</b><small>보이는 시간</small></span>
       <button id="holdPlus" class="mini">＋</button>
     </div>
     <span class="fm-hint">꾹 눌러 끌면<br>순서 바꾸기</span>
@@ -129,15 +130,15 @@
     <label class="field">작품 이름 <input id="pName" maxlength="40" value="새 애니메이션"></label>
     <div class="field"><span>화면 방향</span>
       <div class="orient" id="orientPick">
-        <button type="button" class="orient-btn" data-w="1280" data-h="720"><span class="shape land"></span><b>가로 화면</b><small>1280×720 · 유튜브, TV</small></button>
-        <button type="button" class="orient-btn" data-w="720" data-h="1280"><span class="shape port"></span><b>세로 화면</b><small>720×1280 · 쇼츠, 릴스</small></button>
+        <button type="button" class="orient-btn" data-w="1280" data-h="720"><span class="shape land"></span><b>가로 화면</b><small>옆으로 넓은 그림</small></button>
+        <button type="button" class="orient-btn" data-w="720" data-h="1280"><span class="shape port"></span><b>세로 화면</b><small>위아래로 긴 그림</small></button>
       </div>
       <small id="pCurSize" class="info"></small>
     </div>
     <div class="field"><span>빠르기 (FPS)</span>
       <div id="pFpsList" class="fps-list"></div>
     </div>
-    <label class="field">배경색 <input type="color" id="pBg" value="#ffffff"></label>
+    <label class="field">배경색 (눌러서 바꾸기) <input type="color" id="pBg" value="#ffffff"></label>
     <div class="field" id="resizeModeRow" hidden><span>방향을 바꾸면 지금 그림은</span>
       <div class="seg" id="resizeMode">
         <label><input type="radio" name="rmode" value="fit" checked> 작게 맞추기</label>
@@ -190,7 +191,7 @@
     <h2>색 선택</h2>
     <div class="color-pick">
       <canvas id="svPad" width="240" height="180"></canvas>
-      <canvas id="huePad" width="28" height="180"></canvas>
+      <canvas id="huePad" width="44" height="180"></canvas>
     </div>
     <div class="row">
       <span id="colorPreview" class="color-preview"></span>
@@ -198,7 +199,7 @@
       <button type="button" id="colorSystem" class="mini wide">기본 색상표</button>
     </div>
     <div class="swatches" id="swatches"></div>
-    <div class="label-sm">최근 색</div>
+    <div class="label-sm" id="recentLabel">최근 쓴 색</div>
     <div class="swatches" id="recentSwatches"></div>
     <div class="actions">
       <button value="ok" class="btn primary">닫기</button>
@@ -208,12 +209,12 @@
 
 <dialog id="dlgOnion" class="dlg small">
   <form method="dialog">
-    <h2>어니언 스킨</h2>
-    <label class="field">이전 프레임 수 <input type="range" id="onPrev" min="0" max="3"><span id="onPrevVal"></span></label>
-    <label class="field">다음 프레임 수 <input type="range" id="onNext" min="0" max="3"><span id="onNextVal"></span></label>
+    <h2>겹쳐보기 설정</h2>
+    <label class="field">앞 장면 몇 장 <input type="range" id="onPrev" min="0" max="3"><span id="onPrevVal"></span></label>
+    <label class="field">뒤 장면 몇 장 <input type="range" id="onNext" min="0" max="3"><span id="onNextVal"></span></label>
     <label class="field">진하기 <input type="range" id="onAlpha" min="5" max="80"><span id="onAlphaVal"></span></label>
-    <label class="field check"><input type="checkbox" id="onTint"> 색으로 구분 (이전=빨강, 다음=초록)</label>
-    <label class="field">격자 간격 <select id="gridSize"><option value="25">25px</option><option value="50">50px</option><option value="100">100px</option><option value="200">200px</option><option value="thirds">3등분</option></select></label>
+    <label class="field check"><input type="checkbox" id="onTint"> 색으로 나누기 (앞 장면=빨강, 뒤 장면=초록)</label>
+    <label class="field">격자 간격 <select id="gridSize"><option value="25">아주 촘촘하게</option><option value="50">촘촘하게</option><option value="100">보통</option><option value="200">넓게</option><option value="thirds">3등분</option></select></label>
     <div class="actions"><button value="ok" class="btn primary">닫기</button></div>
   </form>
 </dialog>
@@ -229,14 +230,14 @@
         <label><input type="radio" name="exf" value="frame"> 🖼 지금 장면 그림</label>
       </div>
     </div>
-    <div class="field"><span>해상도</span>
+    <div class="field"><span>크기</span>
       <div class="seg" id="exScale">
-        <label><input type="radio" name="exs" value="0.5"> 0.5배</label>
-        <label><input type="radio" name="exs" value="1" checked> 원본</label>
-        <label><input type="radio" name="exs" value="2"> 2배</label>
+        <label><input type="radio" name="exs" value="0.5"> 작게</label>
+        <label><input type="radio" name="exs" value="1" checked> 보통</label>
+        <label><input type="radio" name="exs" value="2"> 크게</label>
       </div>
     </div>
-    <label class="field check"><input type="checkbox" id="exTransparent"> 투명 배경 (PNG만)</label>
+    <label class="field check"><input type="checkbox" id="exTransparent"> 배경 없이 (그림만)</label>
     <p id="exInfo" class="info"></p>
     <div id="exProgress" class="progress" hidden><div></div></div>
     <div id="exResult" class="ex-result" hidden></div>
@@ -249,7 +250,7 @@
 
 <dialog id="dlgText" class="dlg">
   <form method="dialog">
-    <h2>텍스트</h2>
+    <h2>글자 넣기</h2>
     <textarea id="textInput" class="full textarea" rows="3" placeholder="글자를 입력하세요"></textarea>
     <div class="field row">
       <label>글꼴
@@ -281,7 +282,7 @@
     <p id="audioEmpty" class="info">아직 소리가 없어요. 음악 파일을 불러오거나 녹음해 보세요.</p>
     <div class="row wrap">
       <button type="button" id="audioAddFile" class="btn">🎵 음악 파일 불러오기</button>
-      <button type="button" id="audioRecord" class="btn danger">🎙 현재 프레임부터 녹음</button>
+      <button type="button" id="audioRecord" class="btn danger">🎙 지금 장면부터 녹음</button>
     </div>
     <label class="field check"><input type="checkbox" id="audioSound"> 재생할 때 소리 듣기</label>
     <p class="info">녹음은 애니메이션이 재생되는 동안 이어져요. ■ 버튼을 누르면 끝나요. 이어폰을 쓰면 음악이 녹음에 섞이지 않아요.</p>

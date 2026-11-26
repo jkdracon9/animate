@@ -337,9 +337,13 @@ function resizeView() {
 function fitView() {
   const r = view.getBoundingClientRect();
   if (!r.width || !project) return;
+  // 레이어 패널이 열려 있으면 그만큼 비켜서 맞춘다
+  const side = prefs.layersOpen ? Math.min(250, r.width * 0.4) : 0;
+  const aw = r.width - side;
   V.r = 0;
-  V.zoom = Math.min((r.width - 16) / W, (r.height - 16) / H);
-  V.x = (r.width - W * V.zoom) / 2;
+  V.userZoomed = false;
+  V.zoom = Math.min((aw - 16) / W, (r.height - 16) / H);
+  V.x = (aw - W * V.zoom) / 2;
   V.y = (r.height - H * V.zoom) / 2;
   showHud();
   requestRender();
@@ -717,7 +721,7 @@ function liftSelection(path) {
   cx.fill();
   cx.globalCompositeOperation = 'source-in';
   cx.drawImage(work, 0, 0);
-  const d = cx.getImageData(bx, by, bw, bh).data;
+  const d = cx.getImageData(0, 0, bw, bh).data;
   let any = false;
   for (let i = 3; i < d.length; i += 4) if (d[i]) { any = true; break; }
   if (!any) { toast('선택한 곳에 그림이 없어요'); return; }
@@ -742,8 +746,13 @@ function startFloat(canvas, cx, cy, sx = 1, sy = 1, rot = 0) {
   requestRender();
 }
 
+function floatUnmoved(f) {
+  return f.liftBox && f.rot === 0 && f.sx === 1 && f.sy === 1 &&
+    Math.abs(f.cx - (f.liftBox[0] + f.liftBox[2]) / 2) < 0.01 && Math.abs(f.cy - (f.liftBox[1] + f.liftBox[3]) / 2) < 0.01;
+}
 function finishFloat(stamp) {
   if (!float) return;
+  if (stamp && floatUnmoved(float)) { cancelFloat(); return; }
   const f = float;
   float = null;
   const k = floatCorners(f);
@@ -779,6 +788,7 @@ function cancelFloat() {
   float = null;
   workCtx.clearRect(0, 0, W, H);
   workCtx.drawImage(backup, 0, 0);
+  workDirty = true;
   updateSelBar();
   requestRender();
 }
@@ -786,7 +796,7 @@ function cancelFloat() {
 function copyFloat() {
   if (!float) return;
   selClip = { canvas: cloneCanvas(float.canvas), cx: float.cx, cy: float.cy, sx: float.sx, sy: float.sy, rot: float.rot };
-  toast('복사했어요. 다른 프레임에서 붙여넣기 할 수 있어요');
+  toast('복사했어요. 다른 장면에서도 붙일 수 있어요');
   updateSelBar();
 }
 function pasteClip() {
@@ -831,11 +841,11 @@ function updateSelBar() {
     });
     b('🗑 삭제', deleteFloat);
   } else {
-    b(prefs.selectMode === 'rect' ? '▭ 사각형 선택' : '〰 자유 선택', () => {
+    b(prefs.selectMode === 'rect' ? '▭ 네모로 고르기' : '〰 손으로 그려 고르기', () => {
       prefs.selectMode = prefs.selectMode === 'rect' ? 'lasso' : 'rect';
       savePrefs(); updateSelBar();
     });
-    b('⬚ 레이어 전체 선택', selectAll);
+    b('⬚ 전부 고르기', selectAll);
   }
   if (selClip) b('📥 붙여넣기', pasteClip);
 }
@@ -1023,6 +1033,7 @@ function gestureMove() {
     turn = Math.abs(da) * spread(pts, c); // 돌린 거리(손가락이 움직인 길이)
   }
   placeView(c, gest.d0, z, r);
+  V.userZoomed = true;
   // 이동·확대·회전 중 하나라도 하면 '톡'(실행취소)으로 보지 않는다
   gest.moved = Math.max(gest.moved, Math.hypot(c.x - gest.c0.x, c.y - gest.c0.y) + Math.abs(spread(pts, c) - gest.s0) + turn);
   showHud();
@@ -1054,6 +1065,7 @@ view.addEventListener('pointerdown', (e) => {
     mousePan = { x: e.clientX, y: e.clientY, vx: V.x, vy: V.y };
     return;
   }
+  if (e.pointerType === 'pen' && gest) gest = null; // 손바닥 제스처보다 펜이 먼저
   if (stroke || gest) return;
   startStroke(e);
 });
@@ -1101,6 +1113,7 @@ view.addEventListener('wheel', (e) => {
   const d = screenToDoc(p.x, p.y);
   if (e.shiftKey) placeView(p, d, V.zoom, snapAngle(V.r + e.deltaY * 0.002));
   else placeView(p, d, clamp(V.zoom * Math.exp(-e.deltaY * 0.0015), 0.05, 32), V.r);
+  V.userZoomed = true;
   showHud();
   requestRender();
 }, { passive: false });
@@ -1155,6 +1168,15 @@ function snapshot() {
     frames: project.frames.map((f) => ({ id: f.id, hold: f.hold, cels: { ...f.cels } })),
     cur, layerId,
   };
+}
+function patchHistoryLayer(id, patch) {
+  for (const u of [...undoStack, ...redoStack]) {
+    if (u.t !== 'st') continue;
+    for (const s of [u.before, u.after]) {
+      const L = s.layers.find((x) => x.id === id);
+      if (L) Object.assign(L, patch);
+    }
+  }
 }
 function restoreSnapshot(s) {
   project.layers = s.layers.map((L) => ({ ...L }));
@@ -1296,13 +1318,13 @@ function rebuildTimeline() {
     d.append(n);
     if (f.hold > 1) {
       const h = document.createElement('span');
-      h.className = 'hold-badge'; h.textContent = '×' + f.hold;
+      h.className = 'hold-badge'; h.textContent = f.hold + '칸';
       d.append(h);
     }
     framesEl.append(d);
   });
   const add = document.createElement('button');
-  add.className = 'frame-add'; add.textContent = '＋'; add.title = '새 장면 추가';
+  add.className = 'frame-add'; add.innerHTML = '＋<small>새 장면</small>'; add.title = '새 장면 추가';
   add.addEventListener('click', () => {
     if (playing) stopPlay();
     hideFrameMenu();
@@ -1343,7 +1365,7 @@ function markActiveFrame() {
   if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   const f = frames()[cur];
   $('#frPos').textContent = `${cur + 1} / ${frames().length}`;
-  $('#holdVal').textContent = '×' + f.hold;
+  $('#holdVal').textContent = f.hold + '칸';
 }
 
 const newFrame = (hold = 1) => ({ id: uid(), hold, cels: {} });
@@ -1355,6 +1377,7 @@ function showFrameMenu() {
   const el = frameEls()[cur];
   if (!el || playing) { hideFrameMenu(); return; }
   frameMenu.hidden = false;
+  $('#selBar').style.visibility = 'hidden';
   placeFrameMenu();
 }
 function placeFrameMenu() {
@@ -1372,7 +1395,7 @@ function placeFrameMenu() {
   frameMenu.style.top = (r.top - frameMenu.offsetHeight - 12) + 'px';
   frameMenu.style.setProperty('--arrow', (cx - left) + 'px');
 }
-function hideFrameMenu() { frameMenu.hidden = true; }
+function hideFrameMenu() { frameMenu.hidden = true; $('#selBar').style.visibility = ''; }
 framesEl.addEventListener('scroll', placeFrameMenu);
 window.addEventListener('resize', placeFrameMenu);
 
@@ -1403,13 +1426,14 @@ $('#holdPlus').onclick = () => { structOp(() => { const f = frames()[cur]; if (f
 let fdrag = null;
 const LONG_PRESS = 380;
 framesEl.addEventListener('pointerdown', (e) => {
+  if (fdrag) return; // 이미 다른 손가락으로 누르는 중
   const el = e.target.closest('.frame');
   if (!el || !project) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   fdrag = { i: +el.dataset.i, el, x: e.clientX, y: e.clientY, id: e.pointerId, active: false, moved: false, lastX: e.clientX, lastY: e.clientY };
   fdrag.timer = setTimeout(startFrameDrag, LONG_PRESS);
 });
-framesEl.addEventListener('pointermove', (e) => {
+window.addEventListener('pointermove', (e) => {
   const d = fdrag;
   if (!d || e.pointerId !== d.id) return;
   d.lastX = e.clientX; d.lastY = e.clientY;
@@ -1420,7 +1444,7 @@ framesEl.addEventListener('pointermove', (e) => {
   e.preventDefault();
   updateFrameDrag();
 });
-framesEl.addEventListener('pointerup', (e) => {
+window.addEventListener('pointerup', (e) => {
   const d = fdrag;
   if (!d || e.pointerId !== d.id) return;
   clearTimeout(d.timer);
@@ -1431,7 +1455,7 @@ framesEl.addEventListener('pointerup', (e) => {
   if (d.i === cur && !frameMenu.hidden) hideFrameMenu();
   else { setActive(d.i); showFrameMenu(); }
 });
-framesEl.addEventListener('pointercancel', (e) => {
+window.addEventListener('pointercancel', (e) => {
   const d = fdrag;
   if (!d || e.pointerId !== d.id) return;
   clearTimeout(d.timer);
@@ -1543,6 +1567,7 @@ function refreshLayers() {
     eye.onclick = (ev) => {
       ev.stopPropagation();
       L.visible = !L.visible;
+      patchHistoryLayer(L.id, { visible: L.visible });
       layerVisualChanged();
     };
     const thumb = makeCanvas(108, 72);
@@ -1553,18 +1578,18 @@ function refreshLayers() {
     const lock = document.createElement('button');
     lock.textContent = L.locked ? '🔒' : '🔓'; lock.title = '잠금';
     if (!L.locked) lock.classList.add('off');
-    lock.onclick = (ev) => { ev.stopPropagation(); L.locked = !L.locked; refreshLayers(); scheduleSave(); };
+    lock.onclick = (ev) => { ev.stopPropagation(); L.locked = !L.locked; patchHistoryLayer(L.id, { locked: L.locked }); refreshLayers(); scheduleSave(); };
     row.append(eye, thumb, name, lock);
     row.onclick = () => { if (L.id !== layerId) setActive(cur, L.id); };
     row.ondblclick = async () => {
       const n = await promptDlg('레이어 이름', L.name);
-      if (n) { L.name = n; refreshLayers(); scheduleSave(); }
+      if (n) { L.name = n; patchHistoryLayer(L.id, { name: n }); refreshLayers(); scheduleSave(); }
     };
     let pressTimer = 0;
     row.addEventListener('pointerdown', () => {
       pressTimer = setTimeout(async () => {
         const n = await promptDlg('레이어 이름', L.name);
-        if (n) { L.name = n; refreshLayers(); scheduleSave(); }
+        if (n) { L.name = n; patchHistoryLayer(L.id, { name: n }); refreshLayers(); scheduleSave(); }
       }, 650);
     });
     row.addEventListener('pointerup', () => clearTimeout(pressTimer));
@@ -1625,22 +1650,22 @@ $('#layerMerge').onclick = () => {
   if (li === 0) { toast('맨 아래 레이어는 합칠 수 없어요'); return; }
   structOp(() => {
     const top = project.layers[li], bot = project.layers[li - 1];
+    const ea = (L) => (L.visible ? L.opacity : 0);
     for (const f of project.frames) {
-      const t = f.cels[top.id];
-      if (!t) continue;
-      const b = f.cels[bot.id];
-      const x0 = Math.min(t.x, b ? b.x : t.x), y0 = Math.min(t.y, b ? b.y : t.y);
-      const x1 = Math.max(t.x + t.canvas.width, b ? b.x + b.canvas.width : 0);
-      const y1 = Math.max(t.y + t.canvas.height, b ? b.y + b.canvas.height : 0);
+      const t = f.cels[top.id], b = f.cels[bot.id];
+      if (!t && (!b || ea(bot) === 1)) continue;
+      const parts = [];
+      if (b) parts.push([b, ea(bot)]);
+      if (t) parts.push([t, ea(top)]);
+      const x0 = Math.min(...parts.map(([c]) => c.x)), y0 = Math.min(...parts.map(([c]) => c.y));
+      const x1 = Math.max(...parts.map(([c]) => c.x + c.canvas.width)), y1 = Math.max(...parts.map(([c]) => c.y + c.canvas.height));
       const c = makeCanvas(x1 - x0, y1 - y0);
       const cx = c.getContext('2d');
-      if (b) cx.drawImage(b.canvas, b.x - x0, b.y - y0);
-      cx.globalAlpha = top.visible ? top.opacity / (bot.opacity || 1) : 0;
-      cx.globalAlpha = Math.min(1, cx.globalAlpha);
-      cx.drawImage(t.canvas, t.x - x0, t.y - y0);
+      for (const [cel, a] of parts) { cx.globalAlpha = a; cx.drawImage(cel.canvas, cel.x - x0, cel.y - y0); }
       f.cels[bot.id] = { canvas: c, x: x0, y: y0 };
       delete f.cels[top.id];
     }
+    bot.opacity = 1; bot.visible = true;
     project.layers.splice(li, 1);
     layerId = bot.id;
   }, { thumbsStale: true });
@@ -1658,6 +1683,7 @@ $('#layerDown').onclick = () => structOp(() => {
 $('#layerOpacity').addEventListener('input', (e) => {
   const L = activeLayer();
   L.opacity = e.target.value / 100;
+  patchHistoryLayer(L.id, { opacity: L.opacity });
   $('#layerOpVal').textContent = e.target.value + '%';
   requestRender();
 });
@@ -1718,8 +1744,9 @@ function scheduleAudio(fromTime, total) {
     const buf = audioBuffers.get(clip.id);
     if (!buf) continue;
     const st = frameStartTime(clip.start);
+    if (st >= total - 1e-6) continue;
     const end = Math.min(total, st + buf.duration);
-    if (end <= fromTime) continue;
+    if (end <= fromTime || end - st <= 0) continue;
     const src = ac.createBufferSource();
     src.buffer = buf;
     const g = ac.createGain();
@@ -1820,7 +1847,7 @@ $('#fileAudio').addEventListener('change', async (e) => {
   await addClip(file, file.name.replace(/\.[^.]+$/, '').slice(0, 30), cur);
 });
 
-let recorder = null, recording = false;
+let recorder = null, recording = false, recordingDone = null;
 $('#audioRecord').onclick = async () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
     toast('이 브라우저는 녹음을 지원하지 않아요'); return;
@@ -1833,14 +1860,20 @@ $('#audioRecord').onclick = async () => {
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
   const chunks = [];
   const startFrame = cur;
+  const pid = project.id;
   rec.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
-  rec.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop());
-    const blob = new Blob(chunks, { type: rec.mimeType || mime || 'audio/webm' });
-    if (blob.size < 500) { toast('녹음된 소리가 없어요'); return; }
-    const n = project.audio.filter((c) => c.rec).length + 1;
-    await addClip(blob, '녹음 ' + n, startFrame, true);
-  };
+  recordingDone = new Promise((resolve) => {
+    rec.onstop = async () => {
+      try {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: rec.mimeType || mime || 'audio/webm' });
+        if (!project || project.id !== pid) return;
+        if (blob.size < 500) { toast('녹음된 소리가 없어요'); return; }
+        const n = project.audio.filter((c) => c.rec).length + 1;
+        await addClip(blob, '녹음 ' + n, startFrame, true);
+      } finally { resolve(); }
+    };
+  });
   recorder = rec;
   recording = true;
   rec.start();
@@ -1943,7 +1976,8 @@ function setPlayLabel(on) {
 // =====================================================================
 // 저장
 // =====================================================================
-let saveTimer = 0, saving = false, saveAgain = false;
+let saveTimer = 0;
+let saveChain = Promise.resolve();
 function scheduleSave() {
   if (!project) return;
   clearTimeout(saveTimer);
@@ -1957,46 +1991,50 @@ function metaOf() {
     audio: (project.audio || []).map((c) => ({ ...c })),
   };
 }
-async function galleryThumb() {
+function galleryThumbCanvas() {
   const tw = 360, th = Math.round(clamp((360 * H) / W, 120, 480));
   const c = makeCanvas(tw, th);
   const ctx = c.getContext('2d');
   ctx.fillStyle = project.bg; ctx.fillRect(0, 0, tw, th);
   ctx.setTransform(tw / W, 0, 0, th / H, 0, 0);
   drawCels(ctx, frames()[0]);
-  return canvasToBlob(c, 'image/jpeg', 0.8);
+  return c;
 }
-async function saveNow() {
-  if (!project) return;
-  clearTimeout(saveTimer);
-  if (saving) { saveAgain = true; return; }
-  if (float) { scheduleSave(); return; } // 선택 영역을 옮기는 중에는 확정 후 저장
-  saving = true;
-  try {
-    if (!stroke) commitActive();
-    const pid = project.id;
-    const current = new Map();
-    for (const f of project.frames) {
-      for (const [lid, c] of Object.entries(f.cels)) current.set(`${pid}|${f.id}|${lid}`, { c, fid: f.id, lid });
-    }
-    const puts = [], dels = [];
-    for (const [key, v] of current) {
-      if (saved.get(key) !== v.c) {
-        puts.push({ key, fid: v.fid, lid: v.lid, x: v.c.x, y: v.c.y, blob: await canvasToBlob(v.c.canvas) });
-      }
-    }
-    for (const key of saved.keys()) if (!current.has(key)) dels.push(key);
-    const meta = metaOf();
-    meta.thumb = await galleryThumb();
-    await store.saveProject(meta, puts, dels);
-    if (project && project.id === pid) saved = new Map([...current].map(([k, v]) => [k, v.c]));
-  } catch (err) {
-    console.error(err);
-    toast('저장하지 못했어요: ' + err.message, 4000);
-  } finally {
-    saving = false;
-    if (saveAgain) { saveAgain = false; scheduleSave(); }
+// 저장할 내용을 지금 바로(기다리지 않고) 모은다. 그 뒤에 작품을 닫거나 바꿔도 안전하다.
+function captureSave() {
+  if (!stroke) commitActive();
+  const pid = project.id;
+  const current = new Map();
+  for (const f of project.frames) {
+    for (const [lid, c] of Object.entries(f.cels)) current.set(`${pid}|${f.id}|${lid}`, { c, fid: f.id, lid });
   }
+  const changed = [];
+  for (const [key, v] of current) if (saved.get(key) !== v.c) changed.push({ key, ...v });
+  const dels = [];
+  for (const key of saved.keys()) if (!current.has(key)) dels.push(key);
+  saved = new Map([...current].map(([k, v]) => [k, v.c]));
+  return { pid, meta: metaOf(), thumb: galleryThumbCanvas(), changed, dels };
+}
+async function writeSave(snap) {
+  const puts = [];
+  for (const v of snap.changed) {
+    puts.push({ key: v.key, fid: v.fid, lid: v.lid, x: v.c.x, y: v.c.y, blob: await canvasToBlob(v.c.canvas) });
+  }
+  snap.meta.thumb = await canvasToBlob(snap.thumb, 'image/jpeg', 0.8);
+  await store.saveProject(snap.meta, puts, snap.dels);
+}
+function saveNow() {
+  clearTimeout(saveTimer);
+  if (!project) return saveChain;
+  if (float) { scheduleSave(); return saveChain; } // 옮기는 중인 그림은 확정한 뒤 저장
+  let snap;
+  try { snap = captureSave(); } catch (err) { console.error(err); return saveChain; }
+  saveChain = saveChain.then(() => writeSave(snap)).catch((err) => {
+    console.error(err);
+    if (project && project.id === snap.pid) saved = new Map(); // 다음 저장 때 전부 다시 저장
+    toast('저장하지 못했어요: ' + err.message, 4000);
+  });
+  return saveChain;
 }
 function flushAndSave() {
   if (!project) return;
@@ -2004,8 +2042,7 @@ function flushAndSave() {
   if (stroke) { if (stroke.kind) cancelStroke(); else endStroke(); }
   commitFloat();
   saveNow();
-}
-document.addEventListener('visibilitychange', () => { if (document.hidden) flushAndSave(); });
+}document.addEventListener('visibilitychange', () => { if (document.hidden) flushAndSave(); });
 window.addEventListener('pagehide', flushAndSave);
 
 // =====================================================================
@@ -2020,7 +2057,8 @@ function updateInfo() {
   if (!project) return;
   $('#projName').textContent = project.name;
   const mb = memoryMB();
-  $('#projInfo').textContent = `${W}×${H} · ${frames().length}프레임 · 약 ${mb}MB`;
+  const kind = W === 1280 && H === 720 ? '가로 화면' : W === 720 && H === 1280 ? '세로 화면' : `${W}×${H}`;
+  $('#projInfo').textContent = `${kind} · 장면 ${frames().length}개${mb > 1200 ? ' · ⚠ 메모리를 많이 쓰고 있어요' : ''}`;
   $('#projInfo').style.color = mb > 1200 ? '#ff7a7a' : '';
   $('#fpsNum').textContent = project.fps;
 }
@@ -2039,7 +2077,6 @@ function setTool(t) {
 }
 function syncSliders() {
   const k = toolKey();
-  $('#sizeRange').value = prefs.size[k];
   showSizeDot();
 }
 function showSizeDot() {
@@ -2056,14 +2093,55 @@ document.querySelectorAll('.tool[data-tool]').forEach((b) => {
     else { setTool(b.dataset.tool); closeToolPanel(); }
   });
 });
-$('#sizeRange').addEventListener('input', (e) => {
-  prefs.size[toolKey()] = +e.target.value;
+// 굵기: 버튼을 누르면 미리 정한 굵기 점과 막대가 나온다
+const SIZE_PRESETS = [2, 4, 8, 16, 32, 64];
+function setSize(v) {
+  prefs.size[toolKey()] = clamp(Math.round(v), 1, 200);
   showSizeDot();
   savePrefs();
   const r = view.getBoundingClientRect();
   hover = hover || toDoc({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
   requestRender();
-});
+}
+function openSizePanel() {
+  if (!toolPanel.hidden && toolPanel.dataset.kind === 'size') { closeToolPanel(); return; }
+  closeMenus();
+  toolPanel.dataset.kind = 'size';
+  toolPanel.textContent = '';
+  const h = document.createElement('h4');
+  h.textContent = '굵기';
+  const row = document.createElement('div');
+  row.className = 'size-presets';
+  const cur0 = prefs.size[toolKey()];
+  const range = document.createElement('input');
+  range.type = 'range'; range.min = 1; range.max = 200; range.value = cur0;
+  for (const s of SIZE_PRESETS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    if (s === cur0) b.classList.add('on');
+    const dot = document.createElement('span');
+    const d = clamp(Math.round(Math.sqrt(s) * 4), 4, 36);
+    dot.style.width = dot.style.height = d + 'px';
+    dot.style.background = prefs.tool === 'eraser' ? '#fff' : prefs.color;
+    b.append(dot);
+    b.onclick = () => {
+      setSize(s); range.value = s;
+      row.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    };
+    row.append(b);
+  }
+  const lab = document.createElement('label');
+  const val = document.createElement('span');
+  val.textContent = cur0;
+  range.oninput = () => {
+    setSize(+range.value); val.textContent = range.value;
+    row.querySelectorAll('button').forEach((x, i) => x.classList.toggle('on', SIZE_PRESETS[i] === +range.value));
+  };
+  lab.append('직접', range, val);
+  toolPanel.append(h, row, lab);
+  toolPanel.hidden = false;
+}
+$('#sizeBtn').onclick = openSizePanel;
 
 const toolPanel = $('#toolPanel');
 function closeToolPanel() { toolPanel.hidden = true; }
@@ -2078,6 +2156,7 @@ function toggleToolPanel() {
     return b;
   };
   toolPanel.textContent = '';
+  toolPanel.dataset.kind = 'tool';
   const h = (txt) => { const e = document.createElement('h4'); e.textContent = txt; toolPanel.append(e); };
   const opts = (...btns) => { const d = document.createElement('div'); d.className = 'opts'; d.append(...btns); toolPanel.append(d); };
   const slider = (label, min, max, val, fn) => {
@@ -2114,21 +2193,21 @@ function toggleToolPanel() {
       opt('속 채우기', prefs.shapeFill, () => { prefs.shapeFill = true; savePrefs(); }));
     opacitySlider('shape');
   } else if (t === 'select') {
-    h('선택 방식');
-    opts(opt('자유 선택(올가미)', prefs.selectMode !== 'rect', () => { prefs.selectMode = 'lasso'; savePrefs(); updateSelBar(); }),
-      opt('사각형 선택', prefs.selectMode === 'rect', () => { prefs.selectMode = 'rect'; savePrefs(); updateSelBar(); }));
+    h('옮기기 · 고르는 방법');
+    opts(opt('〰 손으로 그려 고르기', prefs.selectMode !== 'rect', () => { prefs.selectMode = 'lasso'; savePrefs(); updateSelBar(); }),
+      opt('▭ 네모로 고르기', prefs.selectMode === 'rect', () => { prefs.selectMode = 'rect'; savePrefs(); updateSelBar(); }));
     const p = document.createElement('p');
     p.style.cssText = 'font-size:13px;color:#9aa3b5;margin:0';
     p.textContent = '선택한 뒤 안쪽을 끌면 이동, 모서리 네모로 크기, 위쪽 주황 동그라미로 회전해요.';
     toolPanel.append(p);
   } else if (t === 'text') {
-    h('텍스트');
+    h('글자 넣기');
     const p = document.createElement('p');
     p.style.cssText = 'font-size:13px;color:#9aa3b5;margin:0';
     p.textContent = '글자를 넣을 위치를 누르세요. 색은 현재 색을 써요.';
     toolPanel.append(p);
   } else {
-    h('스포이트');
+    h('색 뽑기');
     const p = document.createElement('p');
     p.style.cssText = 'font-size:13px;color:#9aa3b5;margin:0';
     p.textContent = '화면을 누르면 그 위치의 색을 가져와요.';
@@ -2226,6 +2305,7 @@ $('#colorBtn').onclick = async () => {
   Object.assign(hsv, hexToHsv(prefs.color));
   fillSwatches($('#swatches'), PALETTE);
   fillSwatches($('#recentSwatches'), prefs.recent);
+  $('#recentSwatches').hidden = $('#recentLabel').hidden = !prefs.recent.length;
   drawPicker();
   await openDialog($('#dlgColor'));
   setColor(prefs.color, true);
@@ -2244,6 +2324,10 @@ function updateToggles() {
   $('#btnPenOnly').classList.toggle('on', prefs.penOnly);
   $('#btnLayers').classList.toggle('on', prefs.layersOpen);
   $('#layers').hidden = !prefs.layersOpen;
+  for (const [id, on] of [['#btnGrid', prefs.grid], ['#btnPenOnly', prefs.penOnly]]) {
+    const pill = document.querySelector(id + ' .pill');
+    if (pill) { pill.textContent = on ? '켜짐' : '꺼짐'; pill.classList.toggle('on', on); }
+  }
 }
 function longPress(el, onTap, onLong) {
   let t = 0, fired = false;
@@ -2266,8 +2350,8 @@ $('#btnPenOnly').onclick = () => {
   prefs.penOnly = !prefs.penOnly; savePrefs(); updateToggles();
   toast(prefs.penOnly ? '펜으로만 그려요. 손가락은 움직이기·확대만 해요' : '손가락으로도 그릴 수 있어요');
 };
-$('#btnLayers').onclick = () => { prefs.layersOpen = !prefs.layersOpen; savePrefs(); updateToggles(); };
-$('#layersClose').onclick = () => { prefs.layersOpen = false; savePrefs(); updateToggles(); };
+$('#btnLayers').onclick = () => { prefs.layersOpen = !prefs.layersOpen; savePrefs(); updateToggles(); if (!V.userZoomed) fitView(); };
+$('#layersClose').onclick = () => { prefs.layersOpen = false; savePrefs(); updateToggles(); if (!V.userZoomed) fitView(); };
 $('#btnFit').onclick = () => { moreMenu.hidden = true; fitView(); };
 $('#btnFullscreen').onclick = () => {
   moreMenu.hidden = true;
@@ -2339,7 +2423,7 @@ const FPS_INFO = [
   [4, '아주 느리게', '그림책을 한 장씩 넘기는 느낌'],
   [6, '느리게', '뚝뚝 끊기는 재미있는 움직임'],
   [8, '조금 느리게', '처음 해 보기 좋아요'],
-  [12, '추천', '손그림 애니메이션의 기본 빠르기'],
+  [12, '보통 · 추천 ⭐', '손그림 애니메이션의 기본 빠르기'],
   [24, '부드럽게', '만화영화처럼 부드러워요 · 그림이 많이 필요해요'],
   [30, '아주 부드럽게', '동영상처럼 매끄러워요 · 그림이 아주 많이 필요해요'],
 ];
@@ -2419,6 +2503,7 @@ async function projectDialog(mode) {
 $('#btnSettings').onclick = async () => {
   moreMenu.hidden = true;
   if (playing) stopPlay();
+  commitFloat();
   const r = await projectDialog('edit');
   if (!r) return;
   commitActive();
@@ -2475,9 +2560,9 @@ function exportInfo() {
   const [ew, eh] = exportSize();
   const ticks = frames().reduce((a, f) => a + f.hold, 0);
   const sec = (ticks / project.fps).toFixed(2);
-  let txt = `${ew}×${eh} · ${project.fps}fps · ${frames().length}프레임 · ${sec}초`;
+  let txt = `${ew}×${eh} · 빠르기 ${project.fps} · 장면 ${frames().length}개 · ${sec}초`;
   if (fmt === 'mp4') {
-    if (webCodecsAvailable()) txt += ' · H.264 인코더 사용';
+    if (webCodecsAvailable()) { /* 기본 방식 */ }
     else if (recorderAvailable()) txt += ' · 이 브라우저는 실시간 녹화 방식으로 만들어요(WebM일 수 있음)';
     else txt += ' · ⚠ 이 브라우저는 영상 만들기를 지원하지 않아요';
     if (ew > 4096 || eh > 4096) txt += ' · ⚠ 4096px를 넘으면 실패할 수 있어요';
@@ -2528,6 +2613,7 @@ $('#exStart').onclick = async () => {
   $('#exStart').disabled = true;
   $('#exResult').hidden = true;
   exportAbort = new AbortController();
+  const ctrl = exportAbort;
   let audio = null;
   if (fmt === 'mp4') {
     try { audio = await mixAudio(); } catch (e) { console.warn(e); toast('소리를 섞지 못해서 소리 없이 만들어요', 3000); }
@@ -2584,6 +2670,7 @@ $('#exStart').onclick = async () => {
   }
   exportAbort = null;
   $('#exStart').disabled = false;
+  if (!blob || ctrl.signal.aborted) { bar.hidden = true; return; }
   if (blob.note) toast(blob.note, 4000);
   showExportResult(blob, name);
 };
@@ -2636,7 +2723,9 @@ function showExportResult(blob, name) {
 let galleryUrls = [];
 async function showGallery() {
   if (project) {
+    const pendingRec = recording ? recordingDone : null;
     stopPlay();
+    if (pendingRec) await pendingRec;
     commitFloat();
     await saveNow();
   }
@@ -2669,7 +2758,7 @@ async function showGallery() {
     meta.className = 'meta';
     const b = document.createElement('b'); b.textContent = m.name;
     const sm = document.createElement('small');
-    sm.textContent = `${m.width}×${m.height} · ${m.fps}fps · ${m.frameCount || m.frames.length}프레임 · ${new Date(m.updated).toLocaleDateString()}`;
+    sm.textContent = `${m.width > m.height ? '가로' : '세로'} · 장면 ${m.frameCount || m.frames.length}개 · 빠르기 ${m.fps} · ${new Date(m.updated).toLocaleDateString()}`;
     meta.append(b, sm);
     const ops = document.createElement('div');
     ops.className = 'ops';
@@ -2771,9 +2860,13 @@ function enterEditor(p, savedMap, fi, lid) {
 // =====================================================================
 // 시작
 // =====================================================================
-new ResizeObserver(() => { if (project) resizeView(); }).observe($('#stage'));
+new ResizeObserver(() => { if (project) { resizeView(); if (!V.userZoomed) fitView(); } }).observe($('#stage'));
 window.addEventListener('orientationchange', () => setTimeout(() => { if (project) fitView(); }, 300));
 
+document.querySelectorAll('dialog button[value="cancel"]').forEach((b) => {
+  b.type = 'button';
+  b.addEventListener('click', () => b.closest('dialog').close('cancel'));
+});
 setColor(prefs.color);
 setTool(prefs.tool);
 updateShapeIcon();
