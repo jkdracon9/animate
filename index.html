@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1c2029">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>animate</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ===== 갤러리(프로젝트 목록) ===== -->
+<section id="gallery" class="screen">
+  <header class="gal-head">
+    <div class="brand"><img src="icons/icon-192.png" alt=""><span>animate</span></div>
+    <div class="spacer"></div>
+    <button id="galFullscreen" class="btn ghost" title="전체 화면">⛶</button>
+    <button id="galNew" class="btn primary">＋ 새 프로젝트</button>
+  </header>
+  <div id="galList" class="gal-list"></div>
+  <p id="galEmpty" class="gal-empty" hidden>아직 프로젝트가 없어요. <b>＋ 새 프로젝트</b>를 눌러 시작하세요.</p>
+  <footer id="galStorage" class="gal-foot"></footer>
+</section>
+
+<!-- ===== 편집기 ===== -->
+<section id="editor" class="screen" hidden>
+  <header id="topbar">
+    <button id="btnBack" class="tb" title="갤러리">☰</button>
+    <button id="projName" class="proj-name" title="이름 바꾸기"></button>
+    <span id="projInfo" class="proj-info"></span>
+    <div class="spacer"></div>
+    <button id="btnUndo" class="tb" title="실행취소 (두 손가락 탭)">↶</button>
+    <button id="btnRedo" class="tb" title="다시실행 (세 손가락 탭)">↷</button>
+    <span class="sep"></span>
+    <button id="btnOnion" class="tb toggle" title="어니언 스킨">🧅</button>
+    <button id="btnGrid" class="tb toggle" title="격자">#</button>
+    <button id="btnPenOnly" class="tb toggle" title="펜 전용(손가락은 이동/확대)">✒️</button>
+    <button id="btnFit" class="tb" title="화면에 맞추기">⤢</button>
+    <span class="sep"></span>
+    <button id="btnPlay" class="tb play" title="재생">▶</button>
+    <button id="btnFps" class="tb fps" title="FPS"></button>
+    <span class="sep"></span>
+    <button id="btnSettings" class="tb" title="프로젝트 설정">⚙</button>
+    <button id="btnLayers" class="tb toggle" title="레이어">▤</button>
+    <button id="btnExport" class="tb primary" title="내보내기">⤓ 내보내기</button>
+  </header>
+
+  <aside id="tools">
+    <button class="tool" data-tool="brush" title="브러시">✏️</button>
+    <button class="tool" data-tool="eraser" title="지우개">🩹</button>
+    <button class="tool" data-tool="fill" title="채우기">🪣</button>
+    <button class="tool" data-tool="picker" title="스포이트">💧</button>
+    <button class="tool" data-tool="shape" title="도형">⬭</button>
+    <button id="btnImport" class="tool" title="이미지 가져오기">🖼️</button>
+    <div class="tool-sep"></div>
+    <button id="colorBtn" class="color-btn" title="색"><span id="colorChip"></span></button>
+    <div class="vslider"><input type="range" id="sizeRange" min="1" max="200" value="8"><span id="sizeVal">8</span></div>
+    <div class="vslider"><input type="range" id="opacityRange" min="5" max="100" value="100"><span id="opacityVal">100%</span></div>
+  </aside>
+
+  <main id="stage">
+    <canvas id="view"></canvas>
+    <div id="toolPanel" class="popover" hidden></div>
+    <div id="hud" class="hud"></div>
+  </main>
+
+  <aside id="layers" hidden>
+    <div class="panel-head">
+      <b>레이어</b>
+      <div class="spacer"></div>
+      <button id="layerAdd" class="mini" title="레이어 추가">＋</button>
+      <button id="layerDup" class="mini" title="복제">⧉</button>
+      <button id="layerMerge" class="mini" title="아래 레이어와 합치기">⤓</button>
+      <button id="layerDel" class="mini" title="삭제">🗑</button>
+    </div>
+    <div id="layerList" class="layer-list"></div>
+    <div class="layer-opts">
+      <label>불투명도 <span id="layerOpVal">100%</span></label>
+      <input type="range" id="layerOpacity" min="0" max="100" value="100">
+      <div class="row">
+        <button id="layerUp" class="mini wide">▲ 위로</button>
+        <button id="layerDown" class="mini wide">▼ 아래로</button>
+      </div>
+    </div>
+  </aside>
+
+  <footer id="timeline">
+    <div class="tl-buttons">
+      <button id="frAdd" class="mini" title="새 프레임">＋</button>
+      <button id="frDup" class="mini" title="프레임 복제">⧉</button>
+      <button id="frDel" class="mini" title="프레임 삭제">🗑</button>
+      <button id="frCopy" class="mini" title="복사">📋</button>
+      <button id="frPaste" class="mini" title="붙여넣기">📥</button>
+      <button id="frLeft" class="mini" title="앞으로 이동">◀</button>
+      <button id="frRight" class="mini" title="뒤로 이동">▶</button>
+      <div class="hold">
+        <button id="holdMinus" class="mini">−</button>
+        <span id="holdVal" title="이 프레임이 보이는 길이(프레임 수)">×1</span>
+        <button id="holdPlus" class="mini">＋</button>
+      </div>
+      <span id="frPos" class="fr-pos"></span>
+    </div>
+    <div id="frames" class="frames"></div>
+  </footer>
+</section>
+
+<input type="file" id="fileImage" accept="image/*" hidden>
+<input type="color" id="colorNative" hidden>
+
+<!-- ===== 대화상자 ===== -->
+<dialog id="dlgProject" class="dlg">
+  <form method="dialog" id="formProject">
+    <h2 id="dlgProjectTitle">새 프로젝트</h2>
+    <label class="field">이름 <input id="pName" maxlength="40" value="새 애니메이션"></label>
+    <div class="field"><span>영상 크기</span>
+      <div class="presets" id="sizePresets"></div>
+    </div>
+    <div class="field row">
+      <label>가로 <input type="number" id="pW" min="16" max="3840" step="2" value="1920"></label>
+      <button type="button" id="pSwap" class="mini" title="가로↔세로">⇄</button>
+      <label>세로 <input type="number" id="pH" min="16" max="3840" step="2" value="1080"></label>
+    </div>
+    <div class="field row">
+      <label>FPS <input type="number" id="pFps" min="1" max="60" value="12"></label>
+      <label>배경색 <input type="color" id="pBg" value="#ffffff"></label>
+    </div>
+    <div class="field" id="resizeModeRow" hidden><span>크기를 바꿀 때 기존 그림</span>
+      <div class="seg" id="resizeMode">
+        <label><input type="radio" name="rmode" value="fit" checked> 맞추기</label>
+        <label><input type="radio" name="rmode" value="stretch"> 늘리기</label>
+        <label><input type="radio" name="rmode" value="crop"> 자르기(가운데)</label>
+      </div>
+    </div>
+    <p id="pWarn" class="warn"></p>
+    <div class="actions">
+      <button value="cancel" class="btn ghost">취소</button>
+      <button value="ok" class="btn primary" id="pOk">만들기</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgFps" class="dlg small">
+  <form method="dialog">
+    <h2>재생 속도 (FPS)</h2>
+    <div class="presets" id="fpsPresets"></div>
+    <label class="field">직접 입력 (1~60) <input type="number" id="fpsInput" min="1" max="60"></label>
+    <div class="actions">
+      <button value="cancel" class="btn ghost">취소</button>
+      <button value="ok" class="btn primary">적용</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgColor" class="dlg small">
+  <form method="dialog">
+    <h2>색 선택</h2>
+    <div class="color-pick">
+      <canvas id="svPad" width="240" height="180"></canvas>
+      <canvas id="huePad" width="28" height="180"></canvas>
+    </div>
+    <div class="row">
+      <span id="colorPreview" class="color-preview"></span>
+      <input id="colorHex" maxlength="7" class="hex">
+      <button type="button" id="colorSystem" class="mini wide">기본 색상표</button>
+    </div>
+    <div class="swatches" id="swatches"></div>
+    <div class="label-sm">최근 색</div>
+    <div class="swatches" id="recentSwatches"></div>
+    <div class="actions">
+      <button value="ok" class="btn primary">닫기</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgOnion" class="dlg small">
+  <form method="dialog">
+    <h2>어니언 스킨</h2>
+    <label class="field">이전 프레임 수 <input type="range" id="onPrev" min="0" max="3"><span id="onPrevVal"></span></label>
+    <label class="field">다음 프레임 수 <input type="range" id="onNext" min="0" max="3"><span id="onNextVal"></span></label>
+    <label class="field">진하기 <input type="range" id="onAlpha" min="5" max="80"><span id="onAlphaVal"></span></label>
+    <label class="field check"><input type="checkbox" id="onTint"> 색으로 구분 (이전=빨강, 다음=초록)</label>
+    <label class="field">격자 간격 <select id="gridSize"><option value="25">25px</option><option value="50">50px</option><option value="100">100px</option><option value="200">200px</option><option value="thirds">3등분</option></select></label>
+    <div class="actions"><button value="ok" class="btn primary">닫기</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgExport" class="dlg">
+  <form method="dialog" id="formExport">
+    <h2>내보내기</h2>
+    <div class="field"><span>형식</span>
+      <div class="seg" id="exFormat">
+        <label><input type="radio" name="exf" value="mp4" checked> MP4 영상</label>
+        <label><input type="radio" name="exf" value="gif"> GIF</label>
+        <label><input type="radio" name="exf" value="png"> PNG 묶음(ZIP)</label>
+        <label><input type="radio" name="exf" value="frame"> 현재 프레임 PNG</label>
+      </div>
+    </div>
+    <div class="field"><span>해상도</span>
+      <div class="seg" id="exScale">
+        <label><input type="radio" name="exs" value="0.5"> 0.5배</label>
+        <label><input type="radio" name="exs" value="1" checked> 원본</label>
+        <label><input type="radio" name="exs" value="2"> 2배</label>
+      </div>
+    </div>
+    <label class="field check"><input type="checkbox" id="exTransparent"> 투명 배경 (PNG만)</label>
+    <p id="exInfo" class="info"></p>
+    <div id="exProgress" class="progress" hidden><div></div></div>
+    <div id="exResult" class="ex-result" hidden></div>
+    <div class="actions">
+      <button value="cancel" class="btn ghost" id="exClose">닫기</button>
+      <button type="button" class="btn primary" id="exStart">내보내기 시작</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgConfirm" class="dlg small">
+  <form method="dialog">
+    <p id="confirmText"></p>
+    <div class="actions">
+      <button value="cancel" class="btn ghost">취소</button>
+      <button value="ok" class="btn danger" id="confirmOk">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgPrompt" class="dlg small">
+  <form method="dialog">
+    <p id="promptText"></p>
+    <input id="promptInput" class="full" maxlength="40">
+    <div class="actions">
+      <button value="cancel" class="btn ghost">취소</button>
+      <button value="ok" class="btn primary">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
