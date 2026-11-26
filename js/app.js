@@ -1299,12 +1299,15 @@ function rebuildTimeline() {
       h.className = 'hold-badge'; h.textContent = '×' + f.hold;
       d.append(h);
     }
-    d.addEventListener('click', () => { if (playing) stopPlay(); setActive(i); });
     framesEl.append(d);
   });
   const add = document.createElement('button');
-  add.className = 'frame-add'; add.textContent = '＋'; add.title = '맨 뒤에 새 프레임';
-  add.addEventListener('click', () => structOp(() => { project.frames.push(newFrame()); cur = project.frames.length - 1; }));
+  add.className = 'frame-add'; add.textContent = '＋'; add.title = '새 장면 추가';
+  add.addEventListener('click', () => {
+    if (playing) stopPlay();
+    hideFrameMenu();
+    structOp(() => { project.frames.push(newFrame()); cur = project.frames.length - 1; });
+  });
   framesEl.append(add);
   markActiveFrame();
   drawAudioStrip();
@@ -1344,48 +1347,170 @@ function markActiveFrame() {
 }
 
 const newFrame = (hold = 1) => ({ id: uid(), hold, cels: {} });
-let clipFrame = null;
 
-$('#frAdd').onclick = () => structOp(() => { project.frames.splice(cur + 1, 0, newFrame()); cur++; });
-$('#frDup').onclick = () => structOp(() => {
-  const f = frames()[cur];
-  project.frames.splice(cur + 1, 0, { id: uid(), hold: f.hold, cels: { ...f.cels } });
-  cur++;
-});
-$('#frDel').onclick = () => structOp(() => {
-  if (frames().length === 1) { frames()[0].cels = {}; toast('마지막 프레임은 내용만 지웠어요'); return; }
-  project.frames.splice(cur, 1);
-  cur = Math.min(cur, frames().length - 1);
-}, { thumbsStale: frames().length === 1 });
-$('#frCopy').onclick = () => {
-  commitActive();
-  const f = frames()[cur];
-  clipFrame = { hold: f.hold, cels: { ...f.cels } };
-  toast('프레임을 복사했어요');
-};
-$('#frPaste').onclick = () => {
-  if (!clipFrame) { toast('먼저 프레임을 복사하세요'); return; }
+// ---------- 장면 메뉴(복제 · 지우기 · 시간) ----------
+const frameMenu = $('#frameMenu');
+function frameEls() { return framesEl.querySelectorAll('.frame'); }
+function showFrameMenu() {
+  const el = frameEls()[cur];
+  if (!el || playing) { hideFrameMenu(); return; }
+  frameMenu.hidden = false;
+  placeFrameMenu();
+}
+function placeFrameMenu() {
+  if (frameMenu.hidden) return;
+  const el = frameEls()[cur];
+  if (!el) { hideFrameMenu(); return; }
+  const r = el.getBoundingClientRect();
+  const strip = framesEl.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  if (cx < strip.left || cx > strip.right) { frameMenu.style.visibility = 'hidden'; return; }
+  frameMenu.style.visibility = '';
+  const mw = frameMenu.offsetWidth;
+  const left = clamp(cx - mw / 2, 8, window.innerWidth - mw - 8);
+  frameMenu.style.left = left + 'px';
+  frameMenu.style.top = (r.top - frameMenu.offsetHeight - 12) + 'px';
+  frameMenu.style.setProperty('--arrow', (cx - left) + 'px');
+}
+function hideFrameMenu() { frameMenu.hidden = true; }
+framesEl.addEventListener('scroll', placeFrameMenu);
+window.addEventListener('resize', placeFrameMenu);
+
+function dupFrame() {
   structOp(() => {
-    const cels = {};
-    for (const [lid, c] of Object.entries(clipFrame.cels)) if (layerById(lid)) cels[lid] = c;
-    project.frames.splice(cur + 1, 0, { id: uid(), hold: clipFrame.hold, cels });
+    const f = frames()[cur];
+    project.frames.splice(cur + 1, 0, { id: uid(), hold: f.hold, cels: { ...f.cels } });
     cur++;
   });
-};
-$('#frLeft').onclick = () => structOp(() => {
-  if (cur === 0) return false;
-  const f = project.frames;
-  [f[cur - 1], f[cur]] = [f[cur], f[cur - 1]];
-  cur--;
+  showFrameMenu();
+  toast('복제한 장면을 오른쪽에 넣었어요', 1400);
+}
+function delFrame() {
+  const only = frames().length === 1;
+  structOp(() => {
+    if (only) { frames()[0].cels = {}; toast('마지막 장면이라 그림만 지웠어요'); return; }
+    project.frames.splice(cur, 1);
+    cur = Math.min(cur, frames().length - 1);
+  }, { thumbsStale: only });
+  showFrameMenu();
+}
+$('#fmDup').onclick = dupFrame;
+$('#fmDel').onclick = delFrame;
+$('#holdMinus').onclick = () => { structOp(() => { const f = frames()[cur]; if (f.hold <= 1) return false; f.hold--; }); showFrameMenu(); };
+$('#holdPlus').onclick = () => { structOp(() => { const f = frames()[cur]; if (f.hold >= 99) return false; f.hold++; }); showFrameMenu(); };
+
+// ---------- 장면 누르기 / 꾹 눌러 끌어서 순서 바꾸기 ----------
+let fdrag = null;
+const LONG_PRESS = 380;
+framesEl.addEventListener('pointerdown', (e) => {
+  const el = e.target.closest('.frame');
+  if (!el || !project) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  fdrag = { i: +el.dataset.i, el, x: e.clientX, y: e.clientY, id: e.pointerId, active: false, moved: false, lastX: e.clientX, lastY: e.clientY };
+  fdrag.timer = setTimeout(startFrameDrag, LONG_PRESS);
 });
-$('#frRight').onclick = () => structOp(() => {
-  const f = project.frames;
-  if (cur >= f.length - 1) return false;
-  [f[cur + 1], f[cur]] = [f[cur], f[cur + 1]];
-  cur++;
+framesEl.addEventListener('pointermove', (e) => {
+  const d = fdrag;
+  if (!d || e.pointerId !== d.id) return;
+  d.lastX = e.clientX; d.lastY = e.clientY;
+  if (!d.active) {
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10) { clearTimeout(d.timer); d.moved = true; }
+    return;
+  }
+  e.preventDefault();
+  updateFrameDrag();
 });
-$('#holdMinus').onclick = () => structOp(() => { const f = frames()[cur]; if (f.hold <= 1) return false; f.hold--; });
-$('#holdPlus').onclick = () => structOp(() => { const f = frames()[cur]; if (f.hold >= 99) return false; f.hold++; });
+framesEl.addEventListener('pointerup', (e) => {
+  const d = fdrag;
+  if (!d || e.pointerId !== d.id) return;
+  clearTimeout(d.timer);
+  fdrag = null;
+  if (d.active) { endFrameDrag(d, true); return; }
+  if (d.moved) return;
+  if (playing) stopPlay();
+  if (d.i === cur && !frameMenu.hidden) hideFrameMenu();
+  else { setActive(d.i); showFrameMenu(); }
+});
+framesEl.addEventListener('pointercancel', (e) => {
+  const d = fdrag;
+  if (!d || e.pointerId !== d.id) return;
+  clearTimeout(d.timer);
+  fdrag = null;
+  if (d.active) endFrameDrag(d, false);
+});
+// 끄는 동안 장면 줄이 같이 밀리지 않게 막는다
+framesEl.addEventListener('touchmove', (e) => { if (fdrag && fdrag.active) e.preventDefault(); }, { passive: false });
+framesEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function startFrameDrag() {
+  const d = fdrag;
+  if (!d || stroke) return;
+  if (playing) stopPlay();
+  d.active = true;
+  try { framesEl.setPointerCapture(d.id); } catch { /* 무시 */ }
+  hideFrameMenu();
+  if (d.i !== cur) setActive(d.i);
+  d.el = frameEls()[d.i];
+  d.el.classList.add('dragging');
+  const ghost = document.createElement('div');
+  ghost.className = 'frame-ghost';
+  const src = d.el.querySelector('canvas');
+  const gc = makeCanvas(src.width, src.height);
+  gc.getContext('2d').drawImage(src, 0, 0);
+  ghost.append(gc);
+  document.body.append(ghost);
+  d.ghost = ghost;
+  d.marker = document.createElement('div');
+  d.marker.className = 'drop-marker';
+  framesEl.append(d.marker);
+  d.target = d.i;
+  if (navigator.vibrate) navigator.vibrate(20);
+  d.scroller = setInterval(() => {
+    const r = framesEl.getBoundingClientRect();
+    const edge = 50;
+    let dx = 0;
+    if (d.lastX < r.left + edge) dx = -Math.ceil((r.left + edge - d.lastX) / 4);
+    else if (d.lastX > r.right - edge) dx = Math.ceil((d.lastX - (r.right - edge)) / 4);
+    if (dx) { framesEl.scrollLeft += dx; updateFrameDrag(); }
+  }, 16);
+  updateFrameDrag();
+}
+
+function updateFrameDrag() {
+  const d = fdrag;
+  if (!d || !d.active) return;
+  d.ghost.style.left = d.lastX + 'px';
+  d.ghost.style.top = d.lastY + 'px';
+  const kids = [...frameEls()];
+  let slot = kids.length;
+  for (let k = 0; k < kids.length; k++) {
+    const r = kids[k].getBoundingClientRect();
+    if (d.lastX < r.left + r.width / 2) { slot = k; break; }
+  }
+  // slot: 이 위치 앞에 끼워 넣기 → 최종 위치
+  d.target = slot > d.i ? slot - 1 : slot;
+  const ref = kids[slot] || kids[kids.length - 1];
+  const x = slot < kids.length ? ref.offsetLeft - 1 : ref.offsetLeft + ref.offsetWidth + 7;
+  d.marker.style.left = x + 'px';
+  d.marker.style.display = d.target === d.i ? 'none' : '';
+}
+
+function endFrameDrag(d, apply) {
+  clearInterval(d.scroller);
+  if (d.ghost) d.ghost.remove();
+  if (d.marker) d.marker.remove();
+  if (d.el) d.el.classList.remove('dragging');
+  if (apply && d.target !== d.i) {
+    const from = d.i, to = d.target;
+    structOp(() => {
+      const [f] = project.frames.splice(from, 1);
+      project.frames.splice(to, 0, f);
+      cur = to;
+    });
+    toast(`장면을 ${to + 1}번째로 옮겼어요`, 1200);
+  }
+  showFrameMenu();
+}
 
 // =====================================================================
 // 레이어
@@ -1765,6 +1890,7 @@ async function startPlay() {
   commitFloat();
   commitActive();
   [playStarts, playTotal] = computeStarts();
+  hideFrameMenu();
   playing = true;
   playIdx = cur;
   playT0 = performance.now() - playStarts[cur] * 1000;
@@ -2132,7 +2258,7 @@ longPress($('#btnOnion'), () => {
   toast(prefs.onion ? '겹쳐보기 켬: 앞 장면은 빨강, 뒤 장면은 초록으로 보여요' : '겹쳐보기 끔', 1800);
 }, openOnionDialog);
 const moreMenu = $('#moreMenu');
-function closeMenus() { moreMenu.hidden = true; closeToolPanel(); }
+function closeMenus() { moreMenu.hidden = true; closeToolPanel(); hideFrameMenu(); }
 $('#btnMore').onclick = () => { const open = moreMenu.hidden; closeMenus(); moreMenu.hidden = !open; updateInfo(); };
 $('#btnGrid').onclick = () => { prefs.grid = !prefs.grid; savePrefs(); updateToggles(); requestRender(); };
 $('#btnOnionSet').onclick = () => { moreMenu.hidden = true; openOnionDialog(); };
@@ -2516,6 +2642,7 @@ async function showGallery() {
   }
   float = null;
   $('#selBar').hidden = true;
+  hideFrameMenu();
   project = null;
   active = null;
   clearHistory();

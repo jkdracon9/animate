@@ -1,5 +1,5 @@
 // 오프라인 실행용 서비스 워커: 온라인이면 최신 파일을 받고, 오프라인이면 저장된 파일을 쓴다.
-const CACHE = 'animate-v2';
+const CACHE = 'animate-v3';
 const ASSETS = [
   './', './index.html', './css/style.css', './manifest.webmanifest',
   './js/app.js', './js/store.js', './js/mp4.js', './js/gif.js', './js/zip.js',

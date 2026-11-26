@@ -101,25 +101,22 @@
   </main>
 
   <footer id="timeline">
-    <div class="tl-buttons">
-      <button id="frAdd" class="mini lblm" title="새 장면">＋<small>새 장면</small></button>
-      <button id="frDup" class="mini lblm" title="장면 복제">⧉<small>복제</small></button>
-      <button id="frDel" class="mini lblm" title="장면 지우기">🗑<small>지우기</small></button>
-      <div class="hold" title="이 장면이 보이는 시간">
-        <button id="holdMinus" class="mini">−</button>
-        <span><b id="holdVal">×1</b><small>시간</small></span>
-        <button id="holdPlus" class="mini">＋</button>
-      </div>
-      <button id="frLeft" class="mini lblm" title="장면을 앞으로">◀<small>앞으로</small></button>
-      <button id="frRight" class="mini lblm" title="장면을 뒤로">▶<small>뒤로</small></button>
-      <button id="frCopy" class="mini lblm" title="장면 복사">📋<small>복사</small></button>
-      <button id="frPaste" class="mini lblm" title="장면 붙이기">📥<small>붙이기</small></button>
-    </div>
     <div class="tl-strip">
       <span id="frPos" class="fr-pos"></span>
       <div id="frames" class="frames"></div>
     </div>
   </footer>
+
+  <div id="frameMenu" class="frame-menu" hidden>
+    <button id="fmDup" class="mini lblm">⧉<small>복제</small></button>
+    <button id="fmDel" class="mini lblm">🗑<small>지우기</small></button>
+    <div class="hold" title="이 장면이 보이는 시간">
+      <button id="holdMinus" class="mini">−</button>
+      <span><b id="holdVal">×1</b><small>시간</small></span>
+      <button id="holdPlus" class="mini">＋</button>
+    </div>
+    <span class="fm-hint">꾹 눌러 끌면<br>순서 바꾸기</span>
+  </div>
 </section>
 
 <input type="file" id="fileImage" accept="image/*" hidden>
